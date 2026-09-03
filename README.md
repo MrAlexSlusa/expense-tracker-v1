@@ -2,7 +2,14 @@
 
 Log an expense by texting it, or from the app. Same backend, two front doors.
 
-## What's built (v0)
+## What's built (v1)
+
+v1 rebuilds `web/` against the "deep navy" design system — a five-tab mobile
+app shell (Activity / Summary / Budget / Analytics / Accounts) with a
+drill-down category view and three bottom sheets — replacing v0's amber
+"Ink & Lamplight" screens. The backend is the same one, extended with
+accounts and free date ranges to back the new screens. See
+**[The app](#the-app)** below.
 
 - `app/parser.py` — turns free text ("50 groceries", "spent 30 on lunch", "12,50 lei cafea") into an amount + category. 11 tests, all passing, including European comma-decimals.
 - `app/webhook.py` — receives WhatsApp messages in Twilio's exact webhook format and replies with a confirmation.
@@ -10,10 +17,56 @@ Log an expense by texting it, or from the app. Same backend, two front doors.
 - `app/auth.py` — email/password accounts with JWT tokens, plus OTP helpers (login 2FA, password reset). Separate identity path from the WhatsApp phone-number flow, same User/Expense tables.
 - `app/email_sender.py` — sends OTP codes via [Resend](https://resend.com); if `RESEND_API_KEY` isn't set, it logs the email (and code) to the console instead of failing, so the whole flow is testable locally with no account needed.
 - `app/quiz.py` — the signup personality quiz: 4 questions map to tag-weighted scores over a category pool, picking 5 starting budget categories tailored to the answers instead of one generic fixed set.
-- `app/models.py` / `app/database.py` — SQLite for now; one line to swap to Postgres later.
+- `app/models.py` / `app/database.py` — SQLite for now; one line to swap to Postgres later. `ensure_columns` in `database.py` adds columns a database created by an earlier deploy is missing, since `create_all` only ever creates whole tables and there's no Alembic setup here.
 - `app/sheets.py` — mirrors each expense into a personal Google Sheet budget spreadsheet (see setup below). Optional — only used by the WhatsApp flow.
-- `web/` — an installable PWA (no build step, plain HTML/CSS/JS) served by FastAPI at `/app`: sign up, take the onboarding quiz, log expenses, and see a live budget-by-category view. Stepping stone to a native App Store/Play Store app — see below.
+- `web/` — an installable PWA (no build step, plain HTML/CSS/JS) served by FastAPI at `/app`. Stepping stone to a native App Store/Play Store app — see below.
 - 5 end-to-end tests simulating real Twilio-shaped requests through the full pipeline, plus unit tests for the category-matching logic.
+
+## The app
+
+`web/` is five tabs, a drill-down and three bottom sheets, all rendered from
+one state object in a single pass — so adding or deleting an expense updates
+the hero total, day-group totals, donut segments, percentage badges, budget
+bars, goal split and the chart together, and nothing on screen can disagree
+with anything else.
+
+| Tab | What it shows |
+| --- | --- |
+| **Activity** | Period total and its change from the previous period, a spend-per-day bar chart with an average line, filter pills, and transactions grouped by day. The search pill filters live on name and category. |
+| **Summary** | A donut of the period's spend, and the categories ranked by amount with their share as a percentage. Tapping one drills into a single-category ring. |
+| **Budget** | Spend against `of $X planned · day N of M`, the Wants/Needs/Savings goal split, and a progress bar per category that turns red past its target. |
+| **Analytics** | The trailing twelve months as monthly bars, with that range's transactions below it. |
+| **Accounts** | Profile, six stat cells from `/api/me/stats`, settings, the accounts you spend from, and log out. |
+
+The floating **+** opens a keypad sheet that logs an expense; tapping a
+transaction opens a sheet with its date, account and category, and a delete.
+
+**Periods.** The period sheet offers Daily / Weekly / Monthly / Yearly /
+Last 12 months. Anything that isn't a calendar month resolves to an explicit
+`start`/`end` pair, which every read endpoint accepts alongside `period`.
+
+**Categories, income and profile** are edited from rows in Accounts →
+Settings, since the design covers the five tabs but not the management
+screens they need. **Theme** (dark/light/system) and **language** (EN/ES/FR/RO)
+are local settings; **currency** and **two-factor** are stored on the account.
+
+**Where this deviates from the design handoff**, deliberately:
+
+- Spending *more* than the previous period shows the delta in red with an up
+  arrow, not the design's green. The design only illustrates a decrease, and
+  reusing its green for an increase would read as good news.
+- Goal-split actuals are each tag's share of the period's **income**, not of
+  its spend, which is what `GET /api/budget/goals` computes and what the
+  source spreadsheets do (see the docstring there).
+- The Summary list only shows categories with spend in the period — it's a
+  spend ranking, and a category at zero has no donut segment. Categories with
+  no spend still appear on Budget, where their target is the point.
+- The `Income` toggle switches to Activity and lists that period's income
+  rows. Income is month-keyed with no categories, so the donut and the daily
+  chart have nothing to draw from it.
+- Category colours are assigned client-side from the design's eight-colour
+  palette rather than stored per category, keyed on the category's name and
+  de-duplicated so no two categories share one.
 
 ## Run it locally
 
@@ -39,6 +92,8 @@ On a phone, open that same URL in the browser and use "Add to Home Screen" (Safa
 - `GET /api/quiz` — the onboarding quiz's questions/options (text only — the tag weights used for scoring stay server-side).
 - `POST /api/onboarding/complete` — `{"answers": {"weekend": "food", ...}}`, replaces the signup-time placeholder category with the 5 quiz-picked ones and marks the account onboarded.
 - `GET /api/budget` — this user's budget categories and running totals (the in-app version of the Google Sheet mirror — no Google Sheets setup required for the app to work).
+- `GET/POST/PUT/DELETE /api/accounts` — the accounts money is spent from (name, type, last 4 digits, balance, emoji). Descriptive only: the balance is a number you maintain, not a ledger derived from expenses, since most of what moves through a real account never passes through this app. Expenses optionally carry an `account_id`; deleting an account leaves its expenses intact and unattributed.
+- `GET /api/budget`, `GET /api/budget/goals` and `GET /api/expenses` also take `start` and `end` (`YYYY-MM-DD`, inclusive, given together) instead of `period`, for the ranges the app's period sheet offers that a single month can't express.
 - `PUT /api/me/profile` — `{"display_name": ..., "avatar_url": ...}`, a small (<500KB) `data:image/...` URL for the profile picture.
 - `GET /api/me/stats` — total spent, this month's total, monthly average, top category, current daily streak, member-since date — the numbers behind the Profile screen.
 - `PUT /api/me/goals` / `GET /api/budget/goals` — the Wants/Needs/Savings target split (must sum to 100%) and, per period, the actual split computed from tagged categories' spend — the app's version of a spreadsheet's GOALS/ACTUAL block.
@@ -81,9 +136,12 @@ python3 -m pytest tests/ -v
 
 1. **Real Twilio connection** — needs a Twilio account + a public URL. ✅ done, if you've followed the deploy steps.
 2. **Google Sheet mirror** — ✅ done, code-wise. See setup below to connect your own sheet.
-3. **A simple dashboard** — the API returns JSON; there's no visual frontend yet.
-4. **Multi-currency handling** — amounts are just numbers with no currency tracking yet.
-5. **Payments** — wire this in before polishing the dashboard, not after.
+3. **A visual frontend** — ✅ done; `web/` is the app described above.
+4. **Filtering by account or category from the pills** — the `All accounts` and `All categories` pills navigate, as the design specifies; neither filters the data yet.
+5. **Editing an expense in place** — the transaction sheet offers Close and Delete, per the design. `PUT /api/expenses/{id}` exists and is unused by the app.
+6. **Loading and error states** — the design doesn't cover skeletons or error copy; failures currently surface as a message where one fits.
+7. **Multi-currency handling** — the account has a currency, but amounts are stored as plain numbers with no per-expense currency or conversion.
+8. **Payments** — wire this in before polishing anything else.
 
 ## Setting up the Google Sheet (one-time)
 
@@ -125,9 +183,13 @@ Postgres/Neon as its database. The frontend and backend end up on different
 origins, which is already accounted for:
 
 1. Deploy `app/` (the backend) somewhere reachable, e.g. Render. Note its
-   public URL.
-2. Edit `web/config.js` and set `window.API_BASE_URL` to that URL, e.g.
-   `"https://expense-tracker.onrender.com"`. Commit the change.
+   public URL — Render's free tier appends a random suffix, so it can't be
+   guessed ahead of the first deploy.
+2. Edit `web/config.js` and set `DEPLOYED_API_URL` to that URL, e.g.
+   `"https://expense-tracker.onrender.com"`. Commit the change. `config.js`
+   picks the base URL by where the page is served from: localhost talks to
+   whatever is serving it (so local dev needs no edit), anything else talks
+   to `DEPLOYED_API_URL`.
 3. In the repo's **Settings → Pages**, set **Source** to **GitHub Actions**.
 4. Push to `main` — [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml)
    publishes `web/` on every push that touches it (or run it manually from
@@ -141,4 +203,6 @@ the FastAPI app itself for local dev.
 
 ## Your move
 
-Test the parser against messages you'd *actually* send yourself — typos, weird phrasing, whatever. If it breaks on something real, that's the next thing to fix before building the dashboard on top of it.
+Log a week of real expenses through the app and the WhatsApp webhook both,
+then look at Budget at the end of it. Whichever number you don't trust is the
+next thing to fix.

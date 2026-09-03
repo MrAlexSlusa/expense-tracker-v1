@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # SQLite for local dev. In production, set DATABASE_URL to a Postgres URL
@@ -24,3 +24,27 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_columns(*, table: str, columns: dict[str, str]) -> None:
+    """
+    Adds columns that an already-deployed database is missing.
+
+    `Base.metadata.create_all` creates whole tables but never alters existing
+    ones, so a column added to a model after the first deploy would be
+    missing in production until something adds it. There's no Alembic setup
+    here (one app, additive-only changes so far), so this covers the gap:
+    it's idempotent, runs on every boot, and only ever adds nullable columns.
+    """
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        return  # create_all will build it with every column already present
+
+    existing = {c["name"] for c in inspector.get_columns(table)}
+    missing = {name: ddl for name, ddl in columns.items() if name not in existing}
+    if not missing:
+        return
+
+    with engine.begin() as connection:
+        for name, ddl in missing.items():
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))

@@ -3,9 +3,10 @@
   "configurations": [
     {
       "name": "expense-tracker",
-      "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
-      "port": 8000
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+      "port": 8000,
+      "url": "http://localhost:8000"
     }
   ]
 }

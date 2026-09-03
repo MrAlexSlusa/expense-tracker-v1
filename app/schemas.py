@@ -72,6 +72,7 @@ class CategoryOut(BaseModel):
 class ExpenseCreateRequest(BaseModel):
     amount: float
     category_id: Optional[int] = None
+    account_id: Optional[int] = None
     date: Optional[str] = None  # "YYYY-MM-DD"; defaults to today
     note: Optional[str] = None
 
@@ -79,7 +80,9 @@ class ExpenseCreateRequest(BaseModel):
 class ExpenseUpdateRequest(BaseModel):
     amount: Optional[float] = None
     category_id: Optional[int] = None
+    account_id: Optional[int] = None
     clear_category: bool = False
+    clear_account: bool = False
     date: Optional[str] = None  # "YYYY-MM-DD"
     note: Optional[str] = None
 
@@ -90,6 +93,8 @@ class ExpenseOut(BaseModel):
     category_id: Optional[int] = None
     category_name: Optional[str] = None
     category_icon: Optional[str] = None
+    account_id: Optional[int] = None
+    account_name: Optional[str] = None
     note: str
     date: str  # "YYYY-MM-DD"
 
@@ -134,3 +139,21 @@ class IncomeCreateRequest(BaseModel):
 class IncomeUpdateRequest(BaseModel):
     name: Optional[str] = None
     amount: Optional[float] = None
+
+
+class AccountCreateRequest(BaseModel):
+    name: str
+    kind: Optional[str] = None  # "Current" / "Debit" / "Wallet"
+    last4: Optional[str] = None
+    balance: float = 0.0
+    icon: Optional[str] = None
+
+
+class AccountUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    kind: Optional[str] = None
+    last4: Optional[str] = None
+    balance: Optional[float] = None
+    icon: Optional[str] = None
+    clear_kind: bool = False
+    clear_last4: bool = False

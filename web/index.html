@@ -3,394 +3,105 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="theme-color" content="#06070a" />
+<meta name="theme-color" content="#05070f" />
 <title>Expense Tracker</title>
 <link rel="manifest" href="./manifest.json" />
 <link rel="icon" href="./icons/icon-192.png" />
 <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@200;300;400;500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
 
+<!--
+  Auth, OTP and the onboarding quiz are static markup - they're linear forms
+  that never re-render from state. Everything behind the login (the five tabs,
+  the detail view and every sheet) is built by app.js from one state object,
+  the way the design prototype does it, so a change to a transaction updates
+  every total on screen in one pass.
+-->
+
 <div id="auth-screen" class="screen">
-  <div class="auth-brand-corner brand">
-    <span class="brand-dot"></span>
-    <span class="brand-text">
-      <strong data-i18n="appName">Expense Tracker</strong>
-      <small data-i18n="byMrSlushy">by Mr Slushy</small>
-    </span>
-  </div>
-  <div class="auth-card">
-    <h1 data-i18n="appName">Expense Tracker</h1>
-    <p class="subtitle" data-i18n="authSubtitle">Log expenses by chat. Watch your budget update.</p>
+  <div class="auth-column">
+    <div class="auth-mark"><i></i></div>
+    <h1 class="auth-title" data-i18n="appName">Expense Tracker</h1>
+    <p class="auth-subtitle" data-i18n="authSubtitle">Log expenses in seconds. Watch your budget update.</p>
 
     <form id="auth-form">
-      <input id="email" type="email" data-i18n-placeholder="email" placeholder="Email" autocomplete="username" required />
-      <input id="password" type="password" data-i18n-placeholder="password" placeholder="Password" autocomplete="current-password" required minlength="8" />
-      <button type="submit" id="auth-submit" class="primary-btn lamp-pad" data-i18n="login">Log in</button>
+      <label class="field">
+        <span data-i18n="email">Email</span>
+        <input id="email" type="email" autocomplete="username" required />
+      </label>
+      <label class="field">
+        <span data-i18n="password">Password</span>
+        <input id="password" type="password" autocomplete="current-password" required minlength="8" />
+      </label>
+      <button type="submit" id="auth-submit" class="auth-full-btn" data-i18n="login">Log in</button>
     </form>
-    <p class="footer-row">
-      <a href="#" id="switch-link" data-i18n="signup">Create account</a>
-      <a href="#" id="forgot-password-link" data-i18n="forgotPassword">Forgot password?</a>
-    </p>
+
+    <div class="auth-links">
+      <button type="button" id="switch-link" data-i18n="signup">Create account</button>
+      <button type="button" id="forgot-password-link" data-i18n="forgotPassword">Forgot password?</button>
+    </div>
     <p id="auth-error" class="error"></p>
   </div>
 </div>
 
 <div id="otp-screen" class="screen hidden">
-  <div class="auth-card">
-    <h1 data-i18n="enterCode">Enter your code</h1>
-    <p class="subtitle" id="otp-subtitle" data-i18n="otpSentTo">We emailed you a 6-digit code.</p>
+  <div class="auth-column">
+    <div class="auth-mark"><i></i></div>
+    <h1 class="auth-title" data-i18n="enterCode">Enter your code</h1>
+    <p class="auth-subtitle" id="otp-subtitle" data-i18n="otpSentTo">We emailed you a 6-digit code.</p>
 
     <form id="otp-form">
-      <input id="otp-code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" data-i18n-placeholder="code" placeholder="Code" autocomplete="one-time-code" required />
-      <button type="submit" class="primary-btn lamp-pad" data-i18n="verify">Verify</button>
+      <label class="field">
+        <span data-i18n="code">Code</span>
+        <input id="otp-code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" required />
+      </label>
+      <button type="submit" class="auth-full-btn" data-i18n="verify">Verify</button>
     </form>
-    <p class="footer-row">
-      <a href="#" id="otp-back-link" data-i18n="backToLogin">Back to login</a>
-    </p>
+
+    <div class="auth-links">
+      <button type="button" id="otp-back-link" data-i18n="backToLogin">Back to login</button>
+    </div>
     <p id="otp-error" class="error"></p>
   </div>
 </div>
 
 <div id="quiz-screen" class="screen hidden">
-  <div class="quiz-card">
-    <h1 data-i18n="quizTitle">Let's set up your budget</h1>
-    <p class="subtitle" data-i18n="quizSubtitle">A few quick questions to pick categories that actually fit you.</p>
+  <div class="auth-column">
+    <p class="quiz-progress" data-i18n="setup">Setup</p>
+    <h1 class="auth-title" data-i18n="quizTitle">Let's set up your budget</h1>
+    <p class="auth-subtitle" data-i18n="quizSubtitle">A few quick questions to pick categories that actually fit you.</p>
 
     <div id="quiz-questions"></div>
 
-    <button id="quiz-submit-btn" class="primary-btn full-width" disabled data-i18n="finishSetup">Finish setup</button>
+    <button id="quiz-submit-btn" class="auth-full-btn" disabled data-i18n="finishSetup">Finish setup</button>
     <p id="quiz-error" class="error"></p>
   </div>
 </div>
 
 <div id="app-screen" class="screen hidden">
-  <header class="topbar">
-    <span class="brand">
-      <span class="brand-dot"></span>
-      <span class="brand-text">
-        <strong data-i18n="appName">Expense Tracker</strong>
-        <small data-i18n="byMrSlushy">by Mr Slushy</small>
-      </span>
-    </span>
-    <div class="topbar-actions">
-      <button id="profile-btn" class="avatar-btn" aria-label="Profile">
-        <img id="profile-btn-avatar" class="avatar-img hidden" alt="" />
-        <span id="profile-btn-initial" class="avatar-initial">?</span>
-      </button>
-      <button id="settings-btn" class="icon-btn" aria-label="Settings">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1"><circle cx="8" cy="8" r="2.4" /><circle cx="8" cy="8" r="6.2" stroke-dasharray="2 3" /></svg>
-      </button>
+  <div class="app-column">
+    <header class="app-header">
+      <button class="diamond-btn" data-action="go-accounts" aria-label="Accounts"><span></span></button>
+      <div></div>
+    </header>
+
+    <div id="view-root" class="scroll-region"></div>
+  </div>
+
+  <div class="dock">
+    <div class="dock-inner">
+      <button class="fab" data-action="open-add" aria-label="Add expense">+</button>
+      <nav id="tabbar" class="tabbar"></nav>
     </div>
-  </header>
-
-  <main id="add-view" class="view">
-    <div class="amount-hero">
-      <span class="section-label" data-i18n="amount">Amount</span>
-      <div class="amount-display-row">
-        <span id="amount-currency-symbol" class="amount-currency-symbol">$</span>
-        <input type="number" id="amount-number" min="0" step="0.01" value="" placeholder="0" />
-      </div>
-      <div class="amount-slider-wrap">
-        <input type="range" id="amount-slider" class="amount-slider" min="0" max="10000" step="1" value="0" />
-      </div>
-      <div id="amount-presets" class="amount-presets"></div>
-    </div>
-
-    <div class="add-section">
-      <label class="section-label" data-i18n="category">Category</label>
-      <input id="category-search" type="text" class="hidden" data-i18n-placeholder="searchCategory" placeholder="Search category" autocomplete="off" />
-      <div id="category-picker" class="category-picker"></div>
-    </div>
-
-    <div class="add-summary-card">
-      <p id="add-summary-text" class="add-summary-text" data-i18n="pickCategoryAndAmount">Pick a category and an amount.</p>
-      <button id="add-confirm-btn" class="primary-btn full-width" disabled data-i18n="confirmLog">Confirm</button>
-      <p id="add-success" class="success-msg hidden"></p>
-    </div>
-  </main>
-
-  <main id="budget-view" class="view hidden">
-    <div class="budget-header">
-      <div class="month-nav">
-        <button id="period-prev" type="button" class="icon-btn" aria-label="Previous month">‹</button>
-        <input type="month" id="period-input" class="period-input" />
-        <button id="period-next" type="button" class="icon-btn" aria-label="Next month">›</button>
-      </div>
-      <button id="add-category-btn" class="icon-btn accent-icon-btn" aria-label="Add category">＋</button>
-    </div>
-    <div class="budget-month-hero">
-      <span><span id="budget-month-total-symbol" class="amount-currency-symbol">$</span><span id="budget-month-total" class="budget-month-total">0.00</span></span>
-      <span id="budget-day-of-month" class="budget-day-of-month"></span>
-    </div>
-    <div id="goals-bar" class="goals-bar"></div>
-    <div id="budget-list" class="budget-list"></div>
-
-    <div class="entries-header">
-      <h3 data-i18n="entries">Entries</h3>
-      <button id="add-entry-btn" class="ghost-btn" data-i18n="addEntry">+ Add entry</button>
-    </div>
-    <div id="entries-list" class="entries-list"></div>
-  </main>
-
-  <main id="graph-view" class="view hidden">
-    <div class="graph-header">
-      <button id="year-prev" class="icon-btn">‹</button>
-      <span id="year-label" class="year-label"></span>
-      <button id="year-next" class="icon-btn">›</button>
-    </div>
-    <div id="graph-total" class="graph-total"></div>
-    <div id="graph-chart" class="graph-chart"></div>
-    <div id="graph-footer" class="graph-footer"></div>
-  </main>
-
-  <nav class="tabbar">
-    <button class="tab-btn active" data-view="add-view">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M8 2.5v11M2.5 8h11" /></svg>
-      <span data-i18n="add">Add</span>
-    </button>
-    <button class="tab-btn" data-view="budget-view">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M3 13V6.5M8 13V3M13 13V9" /></svg>
-      <span data-i18n="budget">Budget</span>
-    </button>
-    <button class="tab-btn" data-view="graph-view">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M2.5 11.5l4-4 3 3 4-6" /></svg>
-      <span data-i18n="graph">Graph</span>
-    </button>
-  </nav>
-</div>
-
-<!-- Profile screen: identity, stats, and budget-goal split -->
-<div id="profile-screen" class="screen hidden">
-  <header class="topbar">
-    <button id="profile-back-btn" class="icon-btn" aria-label="Back">←</button>
-    <span class="brand"><strong data-i18n="profile">Profile</strong></span>
-    <button id="profile-settings-btn" class="icon-btn" aria-label="Settings">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1"><circle cx="8" cy="8" r="2.4" /><circle cx="8" cy="8" r="6.2" stroke-dasharray="2 3" /></svg>
-    </button>
-  </header>
-
-  <main class="view profile-view">
-    <div class="profile-avatar-row">
-      <button id="profile-avatar-btn" class="avatar-btn avatar-btn-lg" aria-label="Change picture">
-        <img id="profile-avatar-img" class="avatar-img hidden" alt="" />
-        <span id="profile-avatar-initial" class="avatar-initial avatar-initial-lg">?</span>
-      </button>
-      <input id="profile-avatar-input" type="file" accept="image/*" class="hidden" />
-      <div class="profile-identity">
-        <input id="profile-display-name" type="text" data-i18n-placeholder="displayName" placeholder="Display name" maxlength="40" />
-        <p id="profile-email" class="profile-email"></p>
-      </div>
-    </div>
-    <p id="profile-save-hint" class="settings-hint hidden" data-i18n="profileSaved">Saved.</p>
-
-    <div class="stats-grid" id="profile-stats"></div>
-
-    <div class="settings-section">
-      <span class="settings-label" data-i18n="budgetGoals">Budget goal split</span>
-      <p class="settings-hint" data-i18n="budgetGoalsHint">How you want spending split across tags - must add up to 100%.</p>
-      <div class="goal-sliders">
-        <label class="goal-slider-row">
-          <span data-i18n="wants">Wants</span>
-          <input id="goal-wants" type="number" min="0" max="100" step="1" />%
-        </label>
-        <label class="goal-slider-row">
-          <span data-i18n="needs">Needs</span>
-          <input id="goal-needs" type="number" min="0" max="100" step="1" />%
-        </label>
-        <label class="goal-slider-row">
-          <span data-i18n="savings">Savings</span>
-          <input id="goal-savings" type="number" min="0" max="100" step="1" />%
-        </label>
-      </div>
-      <button id="goal-save-btn" class="primary-btn full-width" data-i18n="saveGoals">Save goal split</button>
-      <p id="goal-error" class="error"></p>
-    </div>
-  </main>
-</div>
-
-<!-- Category add/edit modal -->
-<div id="category-modal" class="modal-overlay hidden">
-  <div class="modal-card">
-    <h2 id="category-modal-title" data-i18n="newCategory">New category</h2>
-    <form id="category-form">
-      <label data-i18n="iconEmoji">Mark
-        <input id="category-icon" type="hidden" value="square" />
-        <div class="mark-picker" id="category-mark-picker">
-          <button type="button" class="mark-swatch" data-value="square"><span class="mark mark-square"></span></button>
-          <button type="button" class="mark-swatch" data-value="circle"><span class="mark mark-circle"></span></button>
-          <button type="button" class="mark-swatch" data-value="diamond"><span class="mark mark-diamond"></span></button>
-          <button type="button" class="mark-swatch" data-value="bar"><span class="mark mark-bar"></span></button>
-        </div>
-      </label>
-      <label data-i18n="name">Name
-        <input id="category-name" type="text" data-i18n-placeholder="categoryNamePlaceholder" placeholder="Groceries" required />
-      </label>
-      <label data-i18n="monthlyTarget">Monthly target (optional)
-        <input id="category-target" type="number" step="0.01" min="0" data-i18n-placeholder="noLimit" placeholder="No limit" />
-      </label>
-      <label data-i18n="tagOptional">Tag (optional)
-        <div class="segmented" id="category-tag-segmented">
-          <button type="button" data-value="" data-i18n="none">None</button>
-          <button type="button" data-value="Needs" data-i18n="needs">Needs</button>
-          <button type="button" data-value="Wants" data-i18n="wants">Wants</button>
-          <button type="button" data-value="Savings" data-i18n="savings">Savings</button>
-        </div>
-      </label>
-      <div class="modal-actions">
-        <button type="button" id="category-delete-btn" class="danger-btn hidden" data-i18n="delete">Delete</button>
-        <div class="modal-actions-right">
-          <button type="button" id="category-cancel-btn" class="ghost-btn" data-i18n="cancel">Cancel</button>
-          <button type="submit" class="primary-btn" data-i18n="save">Save</button>
-        </div>
-      </div>
-      <p id="category-error" class="error"></p>
-    </form>
   </div>
 </div>
 
-<!-- Forgot password modal -->
-<div id="forgot-password-modal" class="modal-overlay hidden">
-  <div class="modal-card">
-    <h2 data-i18n="forgotPassword">Forgot password?</h2>
-
-    <form id="forgot-email-form">
-      <label data-i18n="email">Email
-        <input id="forgot-email" type="email" data-i18n-placeholder="email" placeholder="Email" required />
-      </label>
-      <div class="modal-actions">
-        <div></div>
-        <div class="modal-actions-right">
-          <button type="button" id="forgot-cancel-btn" class="ghost-btn" data-i18n="cancel">Cancel</button>
-          <button type="submit" class="primary-btn" data-i18n="sendCode">Send code</button>
-        </div>
-      </div>
-    </form>
-
-    <form id="forgot-reset-form" class="hidden">
-      <label data-i18n="code">Code
-        <input id="forgot-code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" data-i18n-placeholder="code" placeholder="Code" required />
-      </label>
-      <label data-i18n="newPassword">New password
-        <input id="forgot-new-password" type="password" minlength="8" autocomplete="new-password" required />
-      </label>
-      <div class="modal-actions">
-        <div></div>
-        <div class="modal-actions-right">
-          <button type="button" id="forgot-cancel-btn-2" class="ghost-btn" data-i18n="cancel">Cancel</button>
-          <button type="submit" class="primary-btn" data-i18n="resetPassword">Reset password</button>
-        </div>
-      </div>
-    </form>
-
-    <p id="forgot-error" class="error"></p>
-  </div>
-</div>
-
-<!-- Expense entry add/edit modal -->
-<div id="entry-modal" class="modal-overlay hidden">
-  <div class="modal-card">
-    <h2 id="entry-modal-title" data-i18n="newEntry">New entry</h2>
-    <form id="entry-form">
-      <label data-i18n="amount">Amount
-        <input id="entry-amount" type="number" step="0.01" min="0" required />
-      </label>
-      <label data-i18n="category">Category
-        <select id="entry-category"></select>
-      </label>
-      <label data-i18n="date">Date
-        <input id="entry-date" type="date" required />
-      </label>
-      <label data-i18n="noteOptional">Note (optional)
-        <input id="entry-note" type="text" data-i18n-placeholder="noteOptional" placeholder="Note (optional)" />
-      </label>
-      <div class="modal-actions">
-        <button type="button" id="entry-delete-btn" class="danger-btn hidden" data-i18n="delete">Delete</button>
-        <div class="modal-actions-right">
-          <button type="button" id="entry-cancel-btn" class="ghost-btn" data-i18n="cancel">Cancel</button>
-          <button type="submit" class="primary-btn" data-i18n="save">Save</button>
-        </div>
-      </div>
-      <p id="entry-error" class="error"></p>
-    </form>
-  </div>
-</div>
-
-<!-- Settings modal -->
-<div id="settings-modal" class="modal-overlay hidden">
-  <div class="modal-card">
-    <h2 data-i18n="settings">Settings</h2>
-
-    <div class="settings-section">
-      <span class="settings-label" data-i18n="currency">Currency</span>
-      <select id="currency-select"></select>
-    </div>
-
-    <div class="settings-section">
-      <span class="settings-label" data-i18n="language">Language</span>
-      <div class="segmented" id="lang-segmented">
-        <button type="button" data-value="en">EN</button>
-        <button type="button" data-value="es">ES</button>
-        <button type="button" data-value="fr">FR</button>
-        <button type="button" data-value="ro">RO</button>
-      </div>
-    </div>
-
-    <div class="settings-section">
-      <span class="settings-label" data-i18n="theme">Theme</span>
-      <div class="segmented" id="theme-segmented">
-        <button type="button" data-value="dark" data-i18n="dark">Dark</button>
-        <button type="button" data-value="light" data-i18n="light">Light</button>
-        <button type="button" data-value="system" data-i18n="system">System</button>
-      </div>
-    </div>
-
-    <div class="settings-section">
-      <span class="settings-label" data-i18n="accentColor">Accent color</span>
-      <div class="swatch-row" id="accent-swatches"></div>
-    </div>
-
-    <div class="settings-section">
-      <span class="settings-label" data-i18n="font">Font</span>
-      <div class="segmented" id="font-segmented">
-        <button type="button" data-value="mono" data-i18n="mono">Mono</button>
-        <button type="button" data-value="sans" data-i18n="default">Sans</button>
-        <button type="button" data-value="serif" data-i18n="serif">Serif</button>
-        <button type="button" data-value="rounded" data-i18n="rounded">Round</button>
-      </div>
-    </div>
-
-    <div class="settings-section">
-      <span class="settings-label" data-i18n="twoFactor">Two-factor login</span>
-      <div class="segmented" id="two-factor-segmented">
-        <button type="button" data-value="off" data-i18n="off">Off</button>
-        <button type="button" data-value="on" data-i18n="on">On</button>
-      </div>
-      <p class="settings-hint" data-i18n="twoFactorHint">When on, we email you a code to enter every time you log in.</p>
-    </div>
-
-    <div class="settings-section">
-      <span class="settings-label" data-i18n="importSpreadsheet">Import spreadsheet</span>
-      <p class="settings-hint" data-i18n="importSpreadsheetHint">Upload an .xlsx or .csv export of a budget sheet - categories, expenses, income, and goals for that month get filled in.</p>
-      <input id="import-file-input" type="file" accept=".xlsx,.xlsm,.csv,.tsv" />
-      <label class="import-period-label" data-i18n="period">Period
-        <input id="import-period-input" type="month" />
-      </label>
-      <button id="import-submit-btn" class="ghost-btn full-width" data-i18n="import">Import</button>
-      <p id="import-result" class="settings-hint"></p>
-      <p id="import-error" class="error"></p>
-    </div>
-
-    <button id="logout-btn" class="danger-btn full-width" data-i18n="logout">Log out</button>
-    <button id="settings-close-btn" class="ghost-btn full-width" data-i18n="close">Close</button>
-  </div>
-</div>
+<!-- Every bottom sheet renders into here, one at a time. -->
+<div id="sheet-root"></div>
 
 <script src="./config.js"></script>
 <script src="./i18n.js"></script>

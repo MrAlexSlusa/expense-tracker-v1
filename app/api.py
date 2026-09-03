@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import User, Expense, BudgetCategory, IncomeSource
+from app.models import User, Expense, BudgetCategory, IncomeSource, Account
 from app.utils import normalize_phone, best_category_match
 from app.auth import hash_password, verify_password, create_access_token, get_current_user, issue_otp, consume_otp
 from app.parser import parse_expense_message
@@ -35,6 +35,8 @@ from app.schemas import (
     GoalUpdateRequest,
     IncomeCreateRequest,
     IncomeUpdateRequest,
+    AccountCreateRequest,
+    AccountUpdateRequest,
 )
 
 router = APIRouter()
@@ -60,6 +62,40 @@ def _month_bounds(period: Optional[str]) -> tuple[datetime, datetime]:
     days_in_month = monthrange(year, month)[1]
     end = datetime(year, month, days_in_month, 23, 59, 59)
     return start, end
+
+
+def _periods_between(start: datetime, end: datetime) -> list[str]:
+    """Every "YYYY-MM" the given range touches, for the month-keyed income rows."""
+    periods, year, month = [], start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        periods.append(f"{year:04d}-{month:02d}")
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return periods
+
+
+def _date_range(
+    period: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> tuple[datetime, datetime]:
+    """
+    The period sheet in the app offers ranges a single "YYYY-MM" can't
+    express (a week, a year, the trailing 12 months), so every read endpoint
+    also accepts an explicit start/end pair of "YYYY-MM-DD" dates. `period`
+    stays the default so existing callers keep working unchanged.
+    """
+    if start or end:
+        if not (start and end):
+            raise HTTPException(status_code=400, detail="start and end must be given together")
+        try:
+            first = datetime.strptime(start, "%Y-%m-%d")
+            last = datetime.strptime(end, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="start and end must be in YYYY-MM-DD format")
+        if last < first:
+            raise HTTPException(status_code=400, detail="end must not be before start")
+        return first, last.replace(hour=23, minute=59, second=59)
+    return _month_bounds(period)
 
 
 @router.get("/api/users/{phone_number}/expenses")
@@ -278,6 +314,7 @@ def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_
         "current_streak_days": streak,
         "member_since": user.created_at.isoformat() if user.created_at else None,
         "months_tracked": len(by_month),
+        "linked_accounts": db.query(Account).filter(Account.user_id == user.id).count(),
     }
 
 
@@ -420,10 +457,12 @@ def send_chat_message(
 @router.get("/api/budget")
 def get_budget(
     period: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    start, end = _month_bounds(period)
+    start, end = _date_range(period, start, end)
     categories = db.query(BudgetCategory).filter(BudgetCategory.user_id == user.id).all()
 
     totals = dict(
@@ -450,6 +489,8 @@ def get_budget(
 @router.get("/api/budget/goals")
 def get_budget_goals(
     period: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -462,7 +503,7 @@ def get_budget_goals(
     in that sheet's ACTUAL row) - so overspending relative to income shows
     up the same way it does there, including going over 100%.
     """
-    start, end = _month_bounds(period)
+    start, end = _date_range(period, start, end)
     rows = (
         db.query(BudgetCategory.tag, func.sum(Expense.amount))
         .join(Expense, Expense.category_id == BudgetCategory.id)
@@ -474,7 +515,7 @@ def get_budget_goals(
 
     total_income = (
         db.query(func.sum(IncomeSource.amount))
-        .filter(IncomeSource.user_id == user.id, IncomeSource.period == (period or _current_period()))
+        .filter(IncomeSource.user_id == user.id, IncomeSource.period.in_(_periods_between(start, end)))
         .scalar()
         or 0.0
     )
@@ -635,6 +676,8 @@ def _expense_to_dict(e: Expense) -> dict:
         "category_id": e.category_id,
         "category_name": e.matched_category.name if e.matched_category else None,
         "category_icon": e.matched_category.icon if e.matched_category else None,
+        "account_id": e.account_id,
+        "account_name": _account_label(e.account) if e.account else None,
         "note": e.raw_message,
         "date": e.created_at.strftime("%Y-%m-%d"),
     }
@@ -643,14 +686,19 @@ def _expense_to_dict(e: Expense) -> dict:
 @router.get("/api/expenses")
 def list_expenses_for_period(
     period: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    start, end = _month_bounds(period)
+    start, end = _date_range(period, start, end)
     expenses = (
         db.query(Expense)
         .filter(Expense.user_id == user.id, Expense.created_at >= start, Expense.created_at <= end)
-        .order_by(Expense.created_at.desc())
+        # Rows logged from the app carry a date, not a time, so same-day rows
+        # would otherwise come back in an arbitrary order - the id breaks the
+        # tie so the newest one always sorts first within its day.
+        .order_by(Expense.created_at.desc(), Expense.id.desc())
         .all()
     )
     return [_expense_to_dict(e) for e in expenses]
@@ -672,11 +720,14 @@ def create_expense(
         if category is None:
             raise HTTPException(status_code=404, detail="Category not found")
 
+    account = _own_account_or_404(db, user, payload.account_id) if payload.account_id is not None else None
+
     expense = Expense(
         user_id=user.id,
         amount=payload.amount,
         category=category.name if category else None,
         category_id=category.id if category else None,
+        account_id=account.id if account else None,
         raw_message=payload.note or (category.name if category else "Manual entry"),
         created_at=_parse_date_or_400(payload.date),
     )
@@ -711,6 +762,10 @@ def update_expense(
             raise HTTPException(status_code=404, detail="Category not found")
         expense.category_id = category.id
         expense.category = category.name
+    if payload.clear_account:
+        expense.account_id = None
+    elif payload.account_id is not None:
+        expense.account_id = _own_account_or_404(db, user, payload.account_id).id
     if payload.date is not None:
         expense.created_at = _parse_date_or_400(payload.date)
     if payload.note is not None:
@@ -731,6 +786,118 @@ def delete_expense(
     if expense is None:
         raise HTTPException(status_code=404, detail="Expense not found")
     db.delete(expense)
+    db.commit()
+    return {"deleted": True}
+
+
+# --- Accounts: where money was spent from ------------------------------
+# Descriptive only - a balance the user keeps up to date, not a ledger
+# derived from expenses, since most of what moves through a real account
+# never passes through this app.
+
+
+def _account_label(account: Account) -> str:
+    """"Emirates NBD ·1042" - the one-line form the transaction sheet shows."""
+    return f"{account.name} ·{account.last4}" if account.last4 else account.name
+
+
+def _own_account_or_404(db: Session, user: User, account_id: int) -> Account:
+    account = (
+        db.query(Account).filter(Account.id == account_id, Account.user_id == user.id).first()
+    )
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account
+
+
+def _account_to_dict(a: Account) -> dict:
+    return {
+        "id": a.id,
+        "name": a.name,
+        "kind": a.kind,
+        "last4": a.last4,
+        "balance": round(a.balance, 2),
+        "icon": a.icon,
+        "label": _account_label(a),
+    }
+
+
+@router.get("/api/accounts")
+def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    accounts = (
+        db.query(Account).filter(Account.user_id == user.id).order_by(Account.id).all()
+    )
+    return [_account_to_dict(a) for a in accounts]
+
+
+@router.post("/api/accounts")
+def create_account(
+    payload: AccountCreateRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Account name can't be empty")
+
+    account = Account(
+        user_id=user.id,
+        name=name,
+        kind=(payload.kind or None),
+        last4=(payload.last4 or None),
+        balance=payload.balance,
+    )
+    if payload.icon:
+        account.icon = payload.icon
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    return _account_to_dict(account)
+
+
+@router.put("/api/accounts/{account_id}")
+def update_account(
+    account_id: int,
+    payload: AccountUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    account = _own_account_or_404(db, user, account_id)
+
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Account name can't be empty")
+        account.name = name
+    if payload.clear_kind:
+        account.kind = None
+    elif payload.kind is not None:
+        account.kind = payload.kind
+    if payload.clear_last4:
+        account.last4 = None
+    elif payload.last4 is not None:
+        account.last4 = payload.last4
+    if payload.balance is not None:
+        account.balance = payload.balance
+    if payload.icon:
+        account.icon = payload.icon
+
+    db.commit()
+    db.refresh(account)
+    return _account_to_dict(account)
+
+
+@router.delete("/api/accounts/{account_id}")
+def delete_account(
+    account_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    account = _own_account_or_404(db, user, account_id)
+    # Expenses outlive the account they were paid from - they just stop
+    # naming one, the same way a deleted category leaves its expenses intact.
+    db.query(Expense).filter(Expense.account_id == account.id).update({Expense.account_id: None})
+    db.delete(account)
     db.commit()
     return {"deleted": True}
 

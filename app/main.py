@@ -5,12 +5,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.database import Base, engine
+from app.database import Base, engine, ensure_columns
 from app import webhook, api
 
 load_dotenv()  # picks up RESEND_API_KEY etc. from a local .env before anything reads os.environ
 
 Base.metadata.create_all(bind=engine)
+# Added after the first deploy, so databases created before it need the
+# column backfilled - create_all only ever creates whole tables.
+ensure_columns(table="expenses", columns={"account_id": "INTEGER"})
 
 app = FastAPI(title="WhatsApp Expense Tracker")
 

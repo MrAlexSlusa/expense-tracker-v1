@@ -5,7 +5,7 @@
 // first and only fall back to the cached copy if the network fails (e.g.
 // actually offline). This is what makes app updates show up on reload
 // instead of the PWA silently serving whatever it first cached.
-const CACHE = "expense-tracker-shell-v8";
+const CACHE = "expense-tracker-shell-v9";
 const SHELL_FILES = ["./", "./index.html", "./style.css", "./app.js", "./i18n.js", "./config.js", "./manifest.json"];
 
 self.addEventListener("install", (event) => {
