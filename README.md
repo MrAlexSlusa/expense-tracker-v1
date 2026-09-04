@@ -149,7 +149,7 @@ Apple is the odd one out twice over: it has no static client secret (one is mint
 
 | Provider | State |
 | --- | --- |
-| Google | **Live and verified end to end.** Client "Expense Tracker" in the `n8n keys` GCP project, with the Render and `localhost:8000` callbacks registered. |
+| Google | **Live, verified end to end, and published to production** — open to any Google account, not just test users. Client "Expense Tracker" in the `n8n keys` GCP project, with the Render and `localhost:8000` callbacks registered. |
 | GitHub | **Live and verified end to end.** OAuth app "Expense Tracker", both callbacks on the one app — GitHub allows multiple redirect URIs, so unlike Google it needs only one app for prod and local. |
 | Apple | **Not set up.** The code path is written and unit-tested; it needs a paid Apple Developer account before there are credentials to configure. |
 
@@ -166,18 +166,25 @@ Two things about Google's consent screen are worth knowing before you touch it:
   consent screen belongs to the project, so setting it here also changes what
   any other OAuth client in the same project displays. If that matters, give
   the tracker its own project instead.
-- **Publishing to production is blocked on one remaining thing.** The consent
-  screen is in **Testing**, which works for up to 100 hand-added test users
-  and is the right setting for a personal tracker. Going to production needs
-  an application home page, a privacy policy link and a terms of service link,
-  all on a **Google-authorized domain**. The three pages now exist
-  (`index.html`, `privacy.html`, `terms.html` on GitHub Pages), so the only
-  outstanding piece is the domain: `github.io` is on the public suffix list,
-  so Google generally won't accept Pages' hostname as an authorized domain.
-  That needs a domain you own pointed at the same files — not a config toggle.
-  While unverified, Google also shows the raw callback host
-  (`expense-tracker-….onrender.com`) on the consent screen rather than the app
-  name.
+- **It is published, and a GitHub Pages domain was enough.** Going to
+  production needed three things on the Branding page — an application home
+  page, a privacy policy link and a terms of service link — plus their host
+  registered under **Authorized domains**. All three point at the Pages site,
+  and **`mralexslusa.github.io` was accepted as an authorized domain without
+  complaint**. No custom domain, and no verification review: Google requires
+  that only for more than 10 domains, an uploaded logo, or sensitive scopes,
+  and this app has two domains, no logo, and only `openid email profile`.
+
+  Worth recording because the opposite was assumed at first: `github.io` is on
+  the public suffix list, which suggested Google would reject it. It did not.
+  If publishing ever needs redoing, fill the three URL fields and add the host
+  under Authorized domains — don't go buying a domain on the assumption that
+  Pages won't work.
+
+  Two consequences of being published: the consent screen now links the
+  privacy policy and terms, and any Google account can sign in. To pull that
+  back, **Back to testing** on the Audience page returns it to a test-user
+  allowlist.
 
 ### Setting up real OTP emails (optional)
 
@@ -242,9 +249,8 @@ python3 -m pytest tests/ -v
 6. **Loading and error states** — the design doesn't cover skeletons or error copy; failures currently surface as a message where one fits.
 7. **Multi-currency handling** — the account has a currency, but amounts are stored as plain numbers with no per-expense currency or conversion.
 8. **Apple sign-in** — the code path is written and unit-tested; it's waiting on a paid Apple Developer account. Google and GitHub are already live.
-9. **A public consent screen for Google** — the privacy policy and terms pages now exist, so this is down to needing a custom domain; see [Setting up social sign-in](#setting-up-social-sign-in-optional). Testing mode covers a personal tracker fine.
-10. **Self-service account deletion** — individual expenses, categories, accounts and income rows can be deleted, but there's no `DELETE /api/me`, so removing an account is a manual request. The privacy policy says so plainly rather than implying a button that isn't there. Worth building before any app-store submission, which requires it.
-11. **Payments** — wire this in before polishing anything else.
+9. **Self-service account deletion** — individual expenses, categories, accounts and income rows can be deleted, but there's no `DELETE /api/me`, so removing an account is a manual request. The privacy policy says so plainly rather than implying a button that isn't there. Worth building before any app-store submission, which requires it.
+10. **Payments** — wire this in before polishing anything else.
 
 ## Setting up the Google Sheet (one-time)
 
