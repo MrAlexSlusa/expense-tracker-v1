@@ -255,9 +255,39 @@ checked by the same one command, with no test framework in the browser, no
 `node_modules`, and no build step. Those tests skip themselves if Node isn't
 installed.
 
-Anything needing a real DOM - rendering, sheets, event wiring - is deliberately
-out of scope there; asserting it against stubs would give false confidence. It
-is still verified by hand.
+Anything needing a real DOM - rendering, sheets, event wiring - is covered by
+the end-to-end suite instead.
+
+### End to end
+
+```bash
+cd e2e && npm install && npx playwright install chromium
+npx playwright test
+```
+
+[Playwright](https://playwright.dev) drives a real browser against the real
+FastAPI app, which serves the real PWA at `/app` - nothing is mocked, because
+the point is to catch the wiring between the two. It covers signup through the
+onboarding quiz, wrong credentials, both settings of "Save my login info",
+`9 lei` versus `$9`, Analytics opening on All time and keeping its period
+separate from the other tabs, the privacy and terms links, and the whole
+delete-account flow including that a wrong password does **not** end the
+session.
+
+The server runs on port 8123 against a throwaway SQLite file in `e2e/.tmp/`,
+so a run can never touch `expenses.db` and never needs the dev server stopped.
+`JWT_SECRET_KEY` is pinned there because `app/auth.py` otherwise generates a
+random one per process, which would invalidate tokens if the server restarted
+mid-run.
+
+`e2e/` is the only part of this repo with npm dependencies; `web/` itself stays
+dependency-free and keeps its no-build-step property. Both suites run in CI on
+every push - see [`.github/workflows/tests.yml`](.github/workflows/tests.yml).
+
+One caveat worth knowing: e2e tests assert on user-visible English strings
+("Incorrect password", "All time"). Rewording those means updating the tests,
+which is the intended trade - it is the same coupling that makes them able to
+catch a regression a unit test cannot see.
 
 ## What's NOT built yet (in order)
 
