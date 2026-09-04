@@ -1722,3 +1722,18 @@ textarea {
 }
 
 .auth-legal a:hover { color: var(--text-muted); text-decoration: underline; }
+
+/* Delete account sits under Log out. Same danger shape, but hollow: it should
+   read as available, not as the thing you came here to press. */
+.danger-btn-quiet {
+  margin-top: 10px;
+  background: transparent;
+  border-color: var(--white-14);
+  color: var(--text-muted);
+}
+
+.danger-btn-quiet:hover {
+  background: var(--danger-wash);
+  border-color: var(--danger-border);
+  color: var(--danger);
+}

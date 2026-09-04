@@ -369,6 +369,11 @@ async function fetchWithWakeupRetry(url, options, attempts = 4) {
 }
 
 async function apiFetch(path, options = {}) {
+  // Endpoints that re-check a password (deleting the account) answer 401 for a
+  // wrong password, not a dead session. Without this they'd trip the logout
+  // below and throw the user out for a typo.
+  const { credentialCheck = false, ...fetchOptions } = options;
+  options = fetchOptions;
   const token = getToken();
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -379,10 +384,10 @@ async function apiFetch(path, options = {}) {
   } catch {
     throw new Error(t("errServerWakingUp"));
   }
-  if (res.status === 401 && token) {
+  if (res.status === 401 && token && !credentialCheck) {
     // Only an authenticated request's 401 means the session is dead - public
-    // endpoints like OTP verification also 401 on a plain wrong code, which
-    // isn't a reason to log anyone out.
+    // endpoints like OTP verification also 401 on a plain wrong code, and so
+    // does a re-checked password, neither of which is a reason to log anyone out.
     clearToken();
     showAuthScreen();
     throw new Error(t("errSessionExpired"));
@@ -933,6 +938,7 @@ function accountsView() {
       </div>
 
       <button class="danger-btn" data-action="logout">${esc(t("logout"))}</button>
+      <button class="danger-btn danger-btn-quiet" data-action="open-delete-account">${esc(t("deleteAccount"))}</button>
     </div>`;
 }
 
@@ -1073,6 +1079,33 @@ function importSheet() {
     <div class="sheet-btn-row">
       <button class="btn-secondary" data-action="close-sheet">${esc(t("cancel"))}</button>
       <button class="btn-primary" data-action="run-import">${esc(t("import"))}</button>
+    </div>
+    <p class="error">${esc(state.error)}</p>`, { persistent: true });
+}
+
+// Deleting is irreversible and clears out more than the button implies, so the
+// sheet names what goes and asks for something deliberate: the password on an
+// account that has one, and otherwise the word DELETE typed out - a social-only
+// account has no password to re-enter, and a bare "are you sure" is too easy to
+// tap through by accident.
+function deleteAccountSheet() {
+  const me = data.me || {};
+  const needsPassword = me.has_password !== false;
+  const confirmField = needsPassword
+    ? `<label class="field"><span>${esc(t("password"))}</span>
+         <input id="delete-password" type="password" autocomplete="current-password" />
+       </label>`
+    : `<label class="field"><span>${esc(t("typeDeleteToConfirm"))}</span>
+         <input id="delete-confirm" type="text" autocapitalize="characters" />
+       </label>`;
+
+  return sheetShell(`
+    <div class="sheet-title">${esc(t("deleteAccount"))}</div>
+    <p class="sheet-hint">${esc(t("deleteAccountWarning"))}</p>
+    ${confirmField}
+    <div class="sheet-btn-row">
+      <button class="btn-secondary" data-action="close-sheet">${esc(t("cancel"))}</button>
+      <button class="btn-danger-soft" data-action="confirm-delete-account">${esc(t("deleteForever"))}</button>
     </div>
     <p class="error">${esc(state.error)}</p>`, { persistent: true });
 }
@@ -1227,6 +1260,7 @@ const SHEETS = {
   twofactor: twoFactorSheet,
   import: importSheet,
   whatsapp: whatsappSheet,
+  deleteAccount: deleteAccountSheet,
   categories: categoriesSheet,
   categoryEdit: categoryEditSheet,
   income: incomeSheet,
@@ -1652,6 +1686,30 @@ const ACTIONS = {
 
   logout: () => {
     clearToken();
+    showAuthScreen();
+    return "no-render";
+  },
+
+  "open-delete-account": () => { state.sheet = "deleteAccount"; state.error = ""; },
+
+  "confirm-delete-account": async () => {
+    const me = data.me || {};
+    const body = {};
+    if (me.has_password !== false) {
+      const password = (document.getElementById("delete-password") || {}).value || "";
+      if (!password) { state.error = t("errPasswordRequired"); return; }
+      body.password = password;
+    } else {
+      const typed = ((document.getElementById("delete-confirm") || {}).value || "").trim().toUpperCase();
+      if (typed !== "DELETE") { state.error = t("errTypeDelete"); return; }
+    }
+
+    await apiFetch("/api/me", { method: "DELETE", body: JSON.stringify(body), credentialCheck: true });
+    // The account is gone, so there is nothing left to re-render behind the
+    // sheet - drop straight back to the login screen.
+    state.sheet = null;
+    clearToken();
+    localStorage.removeItem(REMEMBERED_EMAIL_KEY);
     showAuthScreen();
     return "no-render";
   },

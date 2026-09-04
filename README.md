@@ -63,6 +63,13 @@ the browser, which is the default and what the app always did) or
 so flipping it mid-session re-homes the live token rather than logging anyone
 out, and turning it off also forgets the remembered email.
 
+**Deleting an account** is Accounts → Delete account, which asks for the
+password again (or, for a social-only account with no password, for the word
+DELETE typed out) before calling `DELETE /api/me`. A 401 there means a wrong
+password, not an expired session, so `apiFetch` takes a `credentialCheck` flag
+that suppresses its usual log-out-and-bounce behaviour — without it a typo
+threw the user out of the app.
+
 **Categories, income and profile** are edited from rows in Accounts →
 Settings, since the design covers the five tabs but not the management
 screens they need. **Theme** (dark/light/system) and **language** (EN/ES/FR/RO)
@@ -250,8 +257,7 @@ python3 -m pytest tests/ -v
 6. **Loading and error states** — the design doesn't cover skeletons or error copy; failures currently surface as a message where one fits.
 7. **Multi-currency handling** — the account has a currency, but amounts are stored as plain numbers with no per-expense currency or conversion.
 8. **Apple sign-in** — the code path is written and unit-tested; it's waiting on a paid Apple Developer account. Google and GitHub are already live.
-9. **A delete-account button in the app** — `DELETE /api/me` exists and is tested, but nothing in `web/` calls it yet, so account deletion is still a request by email in practice. App-store submission requires the in-app route specifically, not just the endpoint.
-10. **Payments** — wire this in before polishing anything else.
+9. **Payments** — wire this in before polishing anything else.
 
 ## Setting up the Google Sheet (one-time)
 

@@ -349,7 +349,7 @@ def delete_account(
         if payload is None or not payload.password:
             raise HTTPException(status_code=400, detail="Enter your password to delete your account")
         if not verify_password(payload.password, user.hashed_password):
-            raise HTTPException(status_code=401, detail="Incorrect email or password")
+            raise HTTPException(status_code=401, detail="Incorrect password")
 
     user_id = user.id
 

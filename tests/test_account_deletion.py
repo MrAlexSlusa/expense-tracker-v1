@@ -134,9 +134,12 @@ def test_a_password_account_cannot_be_deleted_without_the_password():
 
     assert client.request("DELETE", "/api/me", headers=headers).status_code == 400
     assert client.request("DELETE", "/api/me", headers=headers, json={}).status_code == 400
-    assert client.request(
-        "DELETE", "/api/me", headers=headers, json={"password": "wrong-password"}
-    ).status_code == 401
+    wrong = client.request("DELETE", "/api/me", headers=headers, json={"password": "wrong-password"})
+    assert wrong.status_code == 401
+    # The frontend maps this exact string to a translated message and, crucially,
+    # treats it as a wrong password rather than an expired session - so the
+    # wording is part of the contract, not just prose.
+    assert wrong.json()["detail"] == "Incorrect password"
 
     assert _counts(email) is not None  # still there after all three refusals
 
