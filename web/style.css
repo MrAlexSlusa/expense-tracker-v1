@@ -1599,3 +1599,126 @@ textarea {
   height: 19px;
   flex: none;
 }
+
+/* ------------------------------------------------- legal pages */
+/*
+ * privacy.html and terms.html are plain documents, not app screens: they use
+ * the same tokens (so they follow the chosen theme) but a wider measure than
+ * --app-width, which is sized for a phone-shaped app shell and far too narrow
+ * for reading paragraphs.
+ */
+
+.legal {
+  max-width: 660px;
+  margin: 0 auto;
+  padding: 28px var(--gutter) 72px;
+  color: var(--text-soft);
+  font-size: 16px;
+  line-height: 1.62;
+}
+
+.legal .legal-back {
+  display: inline-block;
+  margin-bottom: 26px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 15px;
+}
+
+.legal .legal-back:hover { color: var(--text); text-decoration: none; }
+
+.legal h1 {
+  color: var(--text);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+}
+
+.legal h2 {
+  color: var(--text);
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 34px 0 10px;
+}
+
+.legal h3 {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  margin: 22px 0 8px;
+}
+
+.legal-meta {
+  color: var(--text-faint);
+  font-size: 14px;
+  margin: 0 0 24px;
+}
+
+.legal-lead {
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.6;
+  padding-bottom: 4px;
+}
+
+.legal p { margin: 0 0 14px; }
+
+.legal ul {
+  margin: 0 0 14px;
+  padding-left: 22px;
+}
+
+.legal li { margin-bottom: 8px; }
+
+.legal strong { color: var(--text); font-weight: 600; }
+
+.legal a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.legal a:hover { text-decoration: underline; }
+
+.legal code {
+  background: var(--white-08);
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-size: 14px;
+}
+
+/* The two things a reader most needs to notice: no self-service account
+   deletion, and no backup guarantee. */
+.legal-callout {
+  background: var(--white-05);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 12px 12px 0;
+  padding: 14px 16px;
+  margin: 0 0 14px;
+}
+
+.legal-footer {
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid var(--divider);
+  color: var(--text-faint);
+  font-size: 15px;
+}
+
+.legal .legal-footer a { color: var(--text-muted); }
+.legal .legal-footer a:hover { color: var(--text); }
+
+.auth-legal {
+  margin: 22px 0 0;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--text-faint);
+}
+
+.auth-legal a {
+  color: var(--text-faint);
+  text-decoration: none;
+}
+
+.auth-legal a:hover { color: var(--text-muted); text-decoration: underline; }

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#05070f" />
+<title>Privacy Policy · Expense Tracker</title>
+<link rel="icon" href="./icons/icon-192.png" />
+<link rel="stylesheet" href="./style.css" />
+<script>
+  // Match whatever theme the app is set to, read from the same localStorage
+  // key app.js writes. Runs before paint so the page doesn't flash the wrong
+  // background. Wrapped because a blocked/absent store must not break a
+  // static page that has no other need for JavaScript.
+  try {
+    var saved = JSON.parse(localStorage.getItem("expense_tracker_settings") || "{}");
+    var theme = saved.theme && saved.theme !== "system" ? saved.theme
+      : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    document.documentElement.dataset.theme = theme;
+    document.querySelector('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5fa" : "#05070f");
+  } catch (e) {}
+</script>
+</head>
+<body>
+
+<main class="legal">
+  <a class="legal-back" href="./index.html">← Expense Tracker</a>
+
+  <h1>Privacy Policy</h1>
+  <p class="legal-meta">Last updated 4 September 2026</p>
+
+  <p class="legal-lead">
+    Expense Tracker is a personal project run by one person, not a company. It
+    has no analytics, no advertising, no trackers, and no third-party scripts.
+    Nothing you enter is sold, shared for marketing, or used to profile you.
+    This page describes exactly what it does hold and why.
+  </p>
+
+  <h2>Who runs this</h2>
+  <p>
+    Alexandru Slusarencu, an individual, operating this app as a personal
+    project. For any question about your data, or to request deletion, email
+    <a href="mailto:alex.slusarencu@gmail.com">alex.slusarencu@gmail.com</a>.
+  </p>
+
+  <h2>What is collected</h2>
+
+  <h3>Your account</h3>
+  <ul>
+    <li>Your <strong>email address</strong>, which identifies the account.</li>
+    <li>If you set a password, only a <strong>bcrypt hash</strong> of it. The password itself is never stored and cannot be recovered from the hash.</li>
+    <li>If you sign in with Google or GitHub, the <strong>provider name and the user ID that provider assigns you</strong>, so a later sign-in resolves to the same account.</li>
+    <li>An optional <strong>display name</strong> and <strong>profile picture</strong>. The picture is stored directly in the database as an embedded image, not on a separate image host.</li>
+    <li>Your <strong>currency</strong> preference and whether two-factor login is switched on.</li>
+  </ul>
+
+  <h3>What you record</h3>
+  <ul>
+    <li><strong>Expenses</strong> — amount, category, any note you write, the date, and which account it came from.</li>
+    <li><strong>Income lines</strong> — name and amount, per month.</li>
+    <li><strong>Budget categories</strong>, their monthly targets, and your Wants/Needs/Savings split.</li>
+    <li><strong>Accounts</strong> — the name and type you give them, the last four digits if you enter them, and a balance you maintain yourself. This app never connects to a bank, so it cannot see real balances or transactions.</li>
+  </ul>
+
+  <h3>If you use the WhatsApp bot</h3>
+  <ul>
+    <li>Your <strong>phone number</strong>, and the <strong>full original text</strong> of messages you send it. The raw text is kept alongside the parsed amount so a mis-parsed expense can be checked against what you actually wrote.</li>
+  </ul>
+
+  <h3>Sign-in codes</h3>
+  <p>
+    If two-factor login or a password reset is used, a six-digit code is
+    emailed to you and stored <strong>hashed</strong>, with an expiry, and
+    marked used once redeemed.
+  </p>
+
+  <h2>What is never collected</h2>
+  <ul>
+    <li>No banking credentials, card numbers, or payment details — there is nothing to pay for and no field that asks.</li>
+    <li>No location, contacts, device identifiers, or advertising IDs.</li>
+    <li>No behavioural analytics. The app loads no third-party JavaScript at all, so no outside party sees your visit.</li>
+  </ul>
+
+  <h2>Cookies and browser storage</h2>
+  <p>
+    This app sets <strong>no cookies</strong>. It signs you in with a token
+    held in your browser's own storage:
+  </p>
+  <ul>
+    <li>Your <strong>sign-in token</strong>. With "Save my login info" on it goes in <code>localStorage</code> and survives closing the browser; with it off it goes in <code>sessionStorage</code> and is gone when the tab closes.</li>
+    <li>Your <strong>email address</strong>, to prefill the login form — only while "Save my login info" is on. Switching it off deletes it.</li>
+    <li>Your <strong>theme and language</strong> choices.</li>
+  </ul>
+  <p>
+    All of it stays in your browser and is readable only by this app. Logging
+    out clears the token. Clearing site data clears the rest.
+  </p>
+
+  <h2>Who else touches your data</h2>
+  <p>
+    These are service providers doing a specific job, not partners receiving
+    data to use for their own ends:
+  </p>
+  <ul>
+    <li><strong>Render</strong> — hosts the server and the database where your data lives.</li>
+    <li><strong>GitHub Pages</strong> — serves the app's static files. It receives ordinary web-server request data, not your account contents.</li>
+    <li><strong>Google or GitHub</strong> — only if you choose to sign in with them. They confirm your verified email address and basic profile to this app. This app requests nothing else: it cannot read your Google Drive, Gmail, or your GitHub repositories.</li>
+    <li><strong>Resend</strong> — only to deliver two-factor and password-reset emails, and only if email sending is configured.</li>
+    <li><strong>Twilio</strong> — only if you use the WhatsApp bot, since your messages reach the app through them.</li>
+    <li><strong>Google Sheets</strong> — only if the optional spreadsheet mirror is switched on, in which case expense amounts and categories are written into a spreadsheet you own.</li>
+  </ul>
+  <p>Your data is not sold, rented, or given to anyone else.</p>
+
+  <h2>How long it is kept</h2>
+  <p>
+    Your data stays until you remove it. Individual expenses, income lines,
+    categories and accounts can be deleted inside the app at any time.
+  </p>
+  <p class="legal-callout">
+    <strong>Deleting your whole account currently requires emailing
+    <a href="mailto:alex.slusarencu@gmail.com">alex.slusarencu@gmail.com</a>.</strong>
+    There is no self-service delete button yet. Ask and the account and
+    everything in it will be removed.
+  </p>
+
+  <h2>Security</h2>
+  <p>
+    Passwords are hashed with bcrypt, sign-in tokens are signed and expire,
+    and all traffic runs over HTTPS. Social sign-ins are matched only on an
+    email address the provider states it has verified, so someone cannot reach
+    your account by registering your address elsewhere.
+  </p>
+  <p>
+    Being straightforward about it: this is a personal project maintained by
+    one person, not an audited service with a security team. It is built with
+    care, but do not treat it as a system of record for anything you cannot
+    afford to lose.
+  </p>
+
+  <h2>Your choices</h2>
+  <ul>
+    <li><strong>See your data</strong> — all of it is visible in the app; ask by email for a copy in a machine-readable form.</li>
+    <li><strong>Correct it</strong> — every field is editable in the app.</li>
+    <li><strong>Delete it</strong> — item by item in the app, or the whole account by email.</li>
+    <li><strong>Withdraw a sign-in method</strong> — revoke this app's access in your <a href="https://myaccount.google.com/permissions" rel="noopener">Google account</a> or <a href="https://github.com/settings/applications" rel="noopener">GitHub settings</a> at any time. Your data here is unaffected; you would sign in another way.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>This app is not intended for children under 16 and is not directed at them.</p>
+
+  <h2>Changes</h2>
+  <p>
+    If this policy changes, the date at the top changes with it. Material
+    changes will be noted in the app.
+  </p>
+
+  <p class="legal-footer">
+    <a href="./terms.html">Terms of Service</a> ·
+    <a href="./index.html">Back to the app</a>
+  </p>
+</main>
+
+</body>
+</html>

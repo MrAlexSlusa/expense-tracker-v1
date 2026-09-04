@@ -20,6 +20,7 @@ accounts and free date ranges to back the new screens. See
 - `app/quiz.py` — the signup personality quiz: 4 questions map to tag-weighted scores over a category pool, picking 5 starting budget categories tailored to the answers instead of one generic fixed set.
 - `app/models.py` / `app/database.py` — SQLite locally, Postgres in production via `DATABASE_URL`; nothing else changes between the two. `ensure_columns` in `database.py` adds columns a database created by an earlier deploy is missing, since `create_all` only ever creates whole tables and there's no Alembic setup here. The engine uses `pool_pre_ping` — see [Why the pool pings](#why-the-pool-pings) for the failure it prevents.
 - `app/sheets.py` — mirrors each expense into a personal Google Sheet budget spreadsheet (see setup below). Optional — only used by the WhatsApp flow.
+- `web/privacy.html` / `web/terms.html` — the privacy policy and terms, written against what the app actually does rather than boilerplate. Plain static pages sharing `style.css`, so they follow the app's chosen theme; linked from the foot of the login screen.
 - `web/` — an installable PWA (no build step, plain HTML/CSS/JS) served by FastAPI at `/app`. Stepping stone to a native App Store/Play Store app — see below.
 - 5 end-to-end tests simulating real Twilio-shaped requests through the full pipeline, plus unit tests for the category-matching logic.
 
@@ -165,15 +166,18 @@ Two things about Google's consent screen are worth knowing before you touch it:
   consent screen belongs to the project, so setting it here also changes what
   any other OAuth client in the same project displays. If that matters, give
   the tracker its own project instead.
-- **Publishing to production is blocked, deliberately parked.** The consent
+- **Publishing to production is blocked on one remaining thing.** The consent
   screen is in **Testing**, which works for up to 100 hand-added test users
-  and is the right setting for a personal tracker. Going to production
-  requires an application home page, privacy policy link and terms of service
-  link on a **Google-authorized domain** — and `github.io` is on the public
-  suffix list, so Pages' hostname generally won't be accepted. That needs a
-  domain you own plus two new pages, not a config toggle. While unverified,
-  Google also shows the raw callback host (`expense-tracker-….onrender.com`)
-  on the consent screen rather than the app name.
+  and is the right setting for a personal tracker. Going to production needs
+  an application home page, a privacy policy link and a terms of service link,
+  all on a **Google-authorized domain**. The three pages now exist
+  (`index.html`, `privacy.html`, `terms.html` on GitHub Pages), so the only
+  outstanding piece is the domain: `github.io` is on the public suffix list,
+  so Google generally won't accept Pages' hostname as an authorized domain.
+  That needs a domain you own pointed at the same files — not a config toggle.
+  While unverified, Google also shows the raw callback host
+  (`expense-tracker-….onrender.com`) on the consent screen rather than the app
+  name.
 
 ### Setting up real OTP emails (optional)
 
@@ -238,8 +242,9 @@ python3 -m pytest tests/ -v
 6. **Loading and error states** — the design doesn't cover skeletons or error copy; failures currently surface as a message where one fits.
 7. **Multi-currency handling** — the account has a currency, but amounts are stored as plain numbers with no per-expense currency or conversion.
 8. **Apple sign-in** — the code path is written and unit-tested; it's waiting on a paid Apple Developer account. Google and GitHub are already live.
-9. **A public consent screen for Google** — parked behind a custom domain plus a privacy policy and terms page; see [Setting up social sign-in](#setting-up-social-sign-in-optional). Testing mode covers a personal tracker fine.
-10. **Payments** — wire this in before polishing anything else.
+9. **A public consent screen for Google** — the privacy policy and terms pages now exist, so this is down to needing a custom domain; see [Setting up social sign-in](#setting-up-social-sign-in-optional). Testing mode covers a personal tracker fine.
+10. **Self-service account deletion** — individual expenses, categories, accounts and income rows can be deleted, but there's no `DELETE /api/me`, so removing an account is a manual request. The privacy policy says so plainly rather than implying a button that isn't there. Worth building before any app-store submission, which requires it.
+11. **Payments** — wire this in before polishing anything else.
 
 ## Setting up the Google Sheet (one-time)
 

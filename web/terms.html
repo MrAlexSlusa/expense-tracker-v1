@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#05070f" />
+<title>Terms of Service · Expense Tracker</title>
+<link rel="icon" href="./icons/icon-192.png" />
+<link rel="stylesheet" href="./style.css" />
+<script>
+  // Same pre-paint theme sync as privacy.html - see the comment there.
+  try {
+    var saved = JSON.parse(localStorage.getItem("expense_tracker_settings") || "{}");
+    var theme = saved.theme && saved.theme !== "system" ? saved.theme
+      : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    document.documentElement.dataset.theme = theme;
+    document.querySelector('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4f5fa" : "#05070f");
+  } catch (e) {}
+</script>
+</head>
+<body>
+
+<main class="legal">
+  <a class="legal-back" href="./index.html">← Expense Tracker</a>
+
+  <h1>Terms of Service</h1>
+  <p class="legal-meta">Last updated 4 September 2026</p>
+
+  <p class="legal-lead">
+    Expense Tracker is a free personal project, offered as-is. Using it means
+    accepting the terms below. They are short and say what they mean.
+  </p>
+
+  <h2>What this is</h2>
+  <p>
+    A budgeting tool run by Alexandru Slusarencu as a personal project. It is
+    not a company, not a bank, not a licensed financial service, and there is
+    nothing to pay for.
+  </p>
+
+  <h2>Not financial advice</h2>
+  <p>
+    Everything the app shows — totals, budget progress, the Wants/Needs/Savings
+    split, charts — is arithmetic on numbers you entered yourself. None of it
+    is financial, investment, tax, or legal advice. Decisions you make with it
+    are your own.
+  </p>
+
+  <h2>Your account</h2>
+  <ul>
+    <li>Give an email address you actually control; it is the only way to recover access.</li>
+    <li>Keep your password or your linked Google/GitHub account secure. Anyone who can sign in can see and change everything in your account.</li>
+    <li>One person per account. Don't sign in as someone else.</li>
+  </ul>
+
+  <h2>Your data is yours</h2>
+  <p>
+    You keep ownership of everything you enter. No claim is made over it, and
+    it is not used for anything beyond running the app for you — see the
+    <a href="./privacy.html">Privacy Policy</a>. You can delete individual
+    records in the app, or email
+    <a href="mailto:alex.slusarencu@gmail.com">alex.slusarencu@gmail.com</a>
+    to have the whole account removed.
+  </p>
+
+  <h2>Keep your own records</h2>
+  <p class="legal-callout">
+    <strong>Do not rely on this app as your only copy of anything that
+    matters.</strong> It runs on free hosting, has no backup guarantee, and
+    could lose data or become unavailable without notice. Treat it as a
+    convenience layered on top of your own records, not a replacement for
+    them.
+  </p>
+
+  <h2>Availability</h2>
+  <p>
+    There is no uptime promise. The service runs on a free hosting tier that
+    sleeps when idle, so the first request after a quiet period can take
+    several seconds. It may be changed, interrupted, or discontinued at any
+    time. If it is ever shut down for good, reasonable notice will be given
+    by email so you can export what you need.
+  </p>
+
+  <h2>Fair use</h2>
+  <p>Don't:</p>
+  <ul>
+    <li>attempt to access another person's account or data;</li>
+    <li>probe, overload, or disrupt the service, or automate abusive volumes of requests;</li>
+    <li>use it for anything unlawful, or to store content that is unlawful.</li>
+  </ul>
+  <p>
+    Accounts doing any of the above may be suspended or removed. Security
+    findings reported in good faith to the email above are welcome, not
+    penalised.
+  </p>
+
+  <h2>No warranty</h2>
+  <p>
+    The app is provided "as is" and "as available", without warranties of any
+    kind, express or implied, including fitness for a particular purpose and
+    uninterrupted or error-free operation. Its calculations are believed
+    correct but are not guaranteed.
+  </p>
+
+  <h2>Limitation of liability</h2>
+  <p>
+    To the fullest extent the law allows, the operator is not liable for any
+    indirect or consequential loss, or for lost data, lost profits, or
+    financial decisions made using the app. Nothing here limits liability that
+    cannot lawfully be limited — including for death, personal injury, or
+    fraud — and nothing here removes rights you have as a consumer under the
+    law of your country of residence.
+  </p>
+
+  <h2>Changes to these terms</h2>
+  <p>
+    These terms may change; the date at the top will change with them.
+    Continuing to use the app after a change means accepting the updated
+    terms.
+  </p>
+
+  <h2>Governing law</h2>
+  <p>
+    These terms are governed by the law of Romania, without affecting any
+    mandatory consumer protections available to you where you live.
+  </p>
+
+  <h2>Contact</h2>
+  <p>
+    <a href="mailto:alex.slusarencu@gmail.com">alex.slusarencu@gmail.com</a>
+  </p>
+
+  <p class="legal-footer">
+    <a href="./privacy.html">Privacy Policy</a> ·
+    <a href="./index.html">Back to the app</a>
+  </p>
+</main>
+
+</body>
+</html>
