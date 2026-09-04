@@ -9,16 +9,27 @@ const TMP = path.join(__dirname, ".tmp");
 
 // Prepared here rather than in globalSetup, because Playwright starts webServer
 // before globalSetup and the server cannot open a database in a directory that
-// does not exist yet. This file is also re-evaluated in every worker process,
-// so the work has to be safe to repeat: mkdir is idempotent, and the database
-// is only cleared by the coordinator, before the server has opened it - doing
-// that from a worker would fail on Windows with the file already locked.
+// does not exist yet.
+//
+// Nothing here may delete a database, because this file is re-evaluated in every
+// worker process while the server is running. Windows refuses to unlink an open
+// file, which merely looked like a nuisance; Linux allows it, and a worker
+// deleting the file out from under the server left SQLite writing to an unlinked
+// inode - "attempt to write a readonly database", every test failing in CI while
+// passing locally. So each run gets its own filename and old ones are swept up
+// later, when nothing can still hold them open.
 fs.mkdirSync(TMP, { recursive: true });
-try {
-  fs.rmSync(path.join(TMP, "e2e.db"), { force: true });
-} catch {
-  // Already locked, which means a server has it open and the coordinator has
-  // been through here - nothing to clean and nothing to complain about.
+
+const DB_FILE = `e2e-${process.pid}-${Date.now()}.db`;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+for (const name of fs.readdirSync(TMP)) {
+  const file = path.join(TMP, name);
+  try {
+    if (Date.now() - fs.statSync(file).mtimeMs > DAY_MS) fs.rmSync(file, { force: true });
+  } catch {
+    // A file that vanished or is held open is not this run's problem.
+  }
 }
 
 /*
@@ -54,7 +65,7 @@ module.exports = defineConfig({
     stderr: "pipe",
     timeout: 60_000,
     env: {
-      DATABASE_URL: "sqlite:///./e2e/.tmp/e2e.db",
+      DATABASE_URL: `sqlite:///./e2e/.tmp/${DB_FILE}`,
       JWT_SECRET_KEY: "e2e-fixed-secret-not-used-anywhere-real",
     },
   },
