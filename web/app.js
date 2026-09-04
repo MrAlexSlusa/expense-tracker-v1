@@ -1770,36 +1770,52 @@ const OAUTH_ICONS = {
   github: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.2 1.9 1.2 1.1 1.9 2.9 1.3 3.6 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 016 0C17.4 5.2 18.4 5.5 18.4 5.5c.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0012 .5z"/></svg>`,
 };
 
-let oauthProvidersLoaded = false;
+// Holds the in-flight (or finished) load, so concurrent callers share one
+// request. Cleared again if the request fails, which is the point: a flag set
+// before the await would stick on the very failure it needs to recover from -
+// the backend sleeps on the free tier, so the first call after a cold start is
+// the one most likely to time out, and the buttons would then stay missing for
+// the life of the page even once it woke up.
+// Holds the in-flight (or finished) load, so concurrent callers share one
+// request. Cleared again if the request fails, which is the point: a flag set
+// before the await would stick on the very failure it needs to recover from -
+// the backend sleeps on the free tier, so the first call after a cold start is
+// the one most likely to time out, and the buttons would then stay missing for
+// the life of the page even once it woke up.
+let oauthProvidersLoad = null;
 
-async function loadOauthProviders() {
-  if (oauthProvidersLoaded) return;
-  oauthProvidersLoaded = true;
+function loadOauthProviders() {
+  if (oauthProvidersLoad) return oauthProvidersLoad;
 
-  let providers = [];
-  try {
-    providers = (await apiFetch("/api/auth/providers")).providers || [];
-  } catch {
-    return;  // backend asleep or older than this build - the email form still works
-  }
-  if (!providers.length) return;
+  oauthProvidersLoad = (async () => {
+    let providers = [];
+    try {
+      providers = (await apiFetch("/api/auth/providers")).providers || [];
+    } catch {
+      oauthProvidersLoad = null;  // let the next visit to the login screen retry
+      return;  // backend asleep or older than this build - the email form still works
+    }
+    if (!providers.length) return;
 
-  document.getElementById("oauth-buttons").innerHTML = providers.map((p) => `
-    <button type="button" class="oauth-btn" data-provider="${esc(p.name)}">
-      ${OAUTH_ICONS[p.name] || ""}<span>${esc(t("continueWithProvider", { provider: p.label }))}</span>
-    </button>`).join("");
-  document.getElementById("oauth-block").classList.remove("hidden");
+    document.getElementById("oauth-buttons").innerHTML = providers.map((p) => `
+      <button type="button" class="oauth-btn" data-provider="${esc(p.name)}">
+        ${OAUTH_ICONS[p.name] || ""}<span>${esc(t("continueWithProvider", { provider: p.label }))}</span>
+      </button>`).join("");
+    document.getElementById("oauth-block").classList.remove("hidden");
 
-  document.querySelectorAll("#oauth-buttons .oauth-btn").forEach((button) => {
-    button.addEventListener("click", () => {
-      // Come back to this page with no hash of its own - the backend appends
-      // the token there, and a leftover fragment would collide with it.
-      const back = window.location.href.split("#")[0];
-      window.location.href =
-        `${window.API_BASE_URL}/api/auth/oauth/${encodeURIComponent(button.dataset.provider)}`
-        + `/start?redirect_uri=${encodeURIComponent(back)}`;
+    document.querySelectorAll("#oauth-buttons .oauth-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        // Come back to this page with no hash of its own - the backend appends
+        // the token there, and a leftover fragment would collide with it.
+        const back = window.location.href.split("#")[0];
+        window.location.href =
+          `${window.API_BASE_URL}/api/auth/oauth/${encodeURIComponent(button.dataset.provider)}`
+          + `/start?redirect_uri=${encodeURIComponent(back)}`;
+      });
     });
-  });
+  })();
+
+  return oauthProvidersLoad;
 }
 
 // A social sign-in lands back here with the token (or an error) in the URL
