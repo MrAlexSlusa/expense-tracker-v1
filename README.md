@@ -247,6 +247,18 @@ showed up in production.
 python3 -m pytest tests/ -v
 ```
 
+That covers `web/` as well as the backend. `tests/test_web_units.py` runs the
+real `web/i18n.js` and `web/app.js` through `tests/js_harness.js`, which loads
+them in Node against a stub DOM - so the pure logic (money formatting, date
+ranges, chart bucketing, token storage, escaping, the translation tables) is
+checked by the same one command, with no test framework in the browser, no
+`node_modules`, and no build step. Those tests skip themselves if Node isn't
+installed.
+
+Anything needing a real DOM - rendering, sheets, event wiring - is deliberately
+out of scope there; asserting it against stubs would give false confidence. It
+is still verified by hand.
+
 ## What's NOT built yet (in order)
 
 1. **Real Twilio connection** — needs a Twilio account + a public URL. ✅ done, if you've followed the deploy steps.
