@@ -13,7 +13,24 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+
+# The managed Postgres behind DATABASE_URL drops connections that have been
+# idle a while, and the pool has no way to know: it hands out a socket the
+# server already closed, and the next query dies with "SSL connection has been
+# closed unexpectedly" rather than reconnecting. On a free-tier service that
+# sits idle between visits this is most of its traffic, so the first request
+# after a quiet spell was the one that failed.
+#
+# pool_pre_ping issues a cheap liveness check before handing a connection out
+# and transparently replaces a dead one; pool_recycle retires connections
+# before they get old enough to be dropped in the first place. Neither applies
+# to SQLite (one local file, no sockets), but both are harmless there.
+engine = create_engine(
+    DATABASE_URL,
+    connect_args=connect_args,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
