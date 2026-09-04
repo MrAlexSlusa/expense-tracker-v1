@@ -1522,3 +1522,80 @@ textarea {
 .identity-since {
   display: block;
 }
+
+/* ----------------------------------------------------- auth extras */
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 16px;
+  font-size: 15px;
+  color: var(--text-soft);
+  cursor: pointer;
+  user-select: none;
+}
+
+.check-row input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.oauth-block {
+  margin-top: 22px;
+}
+
+/* The label sits on the rule rather than above it, so the block reads as one
+   separator instead of two stacked elements. */
+.oauth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-faint);
+  font-size: 13.5px;
+  margin-bottom: 14px;
+}
+
+.oauth-divider::before,
+.oauth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--divider);
+}
+
+.oauth-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.oauth-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 48px;
+  border-radius: 16px;
+  background: var(--white-06);
+  border: 1px solid var(--white-10);
+  color: var(--text);
+  font-size: 15.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.oauth-btn:hover {
+  background: var(--white-10);
+}
+
+.oauth-btn svg {
+  width: 19px;
+  height: 19px;
+  flex: none;
+}

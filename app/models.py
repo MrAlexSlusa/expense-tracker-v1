@@ -21,6 +21,13 @@ class User(Base):
     onboarded = Column(Boolean, nullable=False, default=False)  # false until the signup quiz picks their categories
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Set when the account was created (or last signed in) through Google /
+    # Apple / GitHub. Identity is still keyed on email - these are for showing
+    # the user how they got in, and for telling a passwordless social account
+    # apart from one whose password was simply never set.
+    oauth_provider = Column(String, nullable=True)
+    oauth_sub = Column(String, nullable=True)  # the provider's own stable user id
+
     display_name = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)  # data URL (small, base64-encoded image) or an /uploads path
 

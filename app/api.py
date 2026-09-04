@@ -1,8 +1,10 @@
 from datetime import datetime, date, timedelta
+from urllib.parse import quote
 from calendar import monthrange
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -13,6 +15,7 @@ from app.auth import hash_password, verify_password, create_access_token, get_cu
 from app.parser import parse_expense_message
 from app.email_sender import send_otp_email
 from app.quiz import public_questions, compute_categories, fallback_category
+from app import oauth
 from app.importer import parse_workbook, guess_period_from_filename
 from app.schemas import (
     SignupRequest,
@@ -220,6 +223,91 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
     return {"reset": True}
 
 
+# --- Social sign-in (Google / Apple / GitHub) -----------------------------
+# A third way into the same User rows. See app/oauth.py for the flow and for
+# why the code exchange happens here rather than in the browser.
+
+
+@router.get("/api/auth/providers")
+def list_oauth_providers():
+    """Which buttons the login screen should draw - empty if none are configured."""
+    return {"providers": oauth.enabled_providers()}
+
+
+@router.get("/api/auth/oauth/{provider}/start")
+def start_oauth(provider: str, redirect_uri: str, request: Request):
+    if not oauth.is_configured(provider):
+        raise HTTPException(status_code=404, detail="This sign-in method isn't available")
+    try:
+        target = oauth.check_redirect(redirect_uri)
+    except oauth.OAuthError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    url = oauth.authorize_url(
+        provider,
+        oauth.callback_url(provider, str(request.base_url)),
+        oauth.encode_state(provider, target),
+    )
+    return RedirectResponse(url, status_code=302)
+
+
+@router.get("/api/auth/oauth/{provider}/callback")
+def finish_oauth(provider: str, request: Request, code: str = "", state: str = "", db: Session = Depends(get_db)):
+    return _complete_oauth(provider, code, state, request, db)
+
+
+@router.post("/api/auth/oauth/{provider}/callback")
+async def finish_oauth_form_post(provider: str, request: Request, db: Session = Depends(get_db)):
+    """Apple answers with response_mode=form_post, so its callback is a POST."""
+    form = await request.form()
+    return _complete_oauth(provider, str(form.get("code") or ""), str(form.get("state") or ""), request, db)
+
+
+def _complete_oauth(provider: str, code: str, state: str, request: Request, db: Session):
+    """
+    Hands the browser back to the frontend either way: the app JWT in the URL
+    fragment on success, an error code on failure. A fragment is used rather
+    than a query string so the token never reaches a server log or a Referer
+    header - the frontend reads it and strips it from the address bar.
+    """
+    if not oauth.is_configured(provider):
+        raise HTTPException(status_code=404, detail="This sign-in method isn't available")
+
+    try:
+        redirect_uri = oauth.decode_state(provider, state)
+    except oauth.OAuthError as e:
+        # No trusted redirect target, so there's nowhere safe to send them.
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        if not code:
+            raise oauth.OAuthError("The sign-in was cancelled")
+        tokens = oauth.exchange_code(provider, code, oauth.callback_url(provider, str(request.base_url)))
+        email, subject, display_name = oauth.fetch_identity(provider, tokens)
+    except oauth.OAuthError as e:
+        return RedirectResponse(f"{redirect_uri}#oauth_error={quote(str(e))}", status_code=302)
+
+    user = db.query(User).filter(func.lower(User.email) == email).first()
+    if user is None:
+        # New account: no password is ever set, and onboarded stays false so
+        # the signup quiz runs exactly as it does for an email signup.
+        user = User(email=email, oauth_provider=provider, oauth_sub=subject, display_name=display_name)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        name, icon = fallback_category("en")
+        db.add(BudgetCategory(user_id=user.id, name=name, icon=icon))
+        db.commit()
+    else:
+        user.oauth_provider = provider
+        user.oauth_sub = subject
+        if not user.display_name and display_name:
+            user.display_name = display_name
+        db.commit()
+
+    return RedirectResponse(f"{redirect_uri}#token={create_access_token(user.id)}", status_code=302)
+
+
 @router.get("/api/me")
 def get_me(user: User = Depends(get_current_user)):
     return {
@@ -228,6 +316,8 @@ def get_me(user: User = Depends(get_current_user)):
         "currency": user.currency,
         "two_factor_enabled": user.two_factor_enabled,
         "onboarded": user.onboarded,
+        "oauth_provider": user.oauth_provider,
+        "has_password": user.hashed_password is not None,
         "display_name": user.display_name,
         "avatar_url": user.avatar_url,
         "wants_goal_pct": user.wants_goal_pct,

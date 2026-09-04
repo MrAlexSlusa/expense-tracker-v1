@@ -37,8 +37,19 @@
         <span data-i18n="password">Password</span>
         <input id="password" type="password" autocomplete="current-password" required minlength="8" />
       </label>
+      <label class="check-row">
+        <input id="remember-me" type="checkbox" checked />
+        <span data-i18n="saveLoginInfo">Save my login info</span>
+      </label>
       <button type="submit" id="auth-submit" class="auth-full-btn" data-i18n="login">Log in</button>
     </form>
+
+    <!-- Filled in by app.js from /api/auth/providers, and left empty (so the
+         divider never shows on its own) when no provider is configured. -->
+    <div id="oauth-block" class="oauth-block hidden">
+      <div class="oauth-divider"><span data-i18n="orContinueWith">or continue with</span></div>
+      <div id="oauth-buttons" class="oauth-buttons"></div>
+    </div>
 
     <div class="auth-links">
       <button type="button" id="switch-link" data-i18n="signup">Create account</button>

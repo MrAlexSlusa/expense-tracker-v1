@@ -8,12 +8,21 @@
 
 const TOKEN_KEY = "expense_tracker_token";
 const SETTINGS_KEY = "expense_tracker_settings";
+// "Save my login info": whether the session survives closing the browser, and
+// the email to prefill next time. Both live in localStorage even when the
+// answer is "no" - the preference itself has to outlive the session it turns off.
+const REMEMBER_KEY = "expense_tracker_remember";
+const REMEMBERED_EMAIL_KEY = "expense_tracker_remembered_email";
 
 const CURRENCIES = [
   ["USD", "$"], ["EUR", "€"], ["GBP", "£"], ["RON", "lei"], ["JPY", "¥"],
   ["AED", "AED"], ["CHF", "Fr"], ["CAD", "$"], ["AUD", "$"], ["CNY", "¥"], ["INR", "₹"],
   ["BRL", "R$"], ["MXN", "$"], ["SEK", "kr"], ["NOK", "kr"], ["PLN", "zł"], ["TRY", "₺"],
 ];
+
+// Most of the list above is written symbol-first ("$9"), but a few are
+// written after the amount in their own convention - "9 lei", never "lei9".
+const SUFFIX_CURRENCIES = new Set(["RON"]);
 
 const LANGUAGES = [["en", "English"], ["es", "Español"], ["fr", "Français"], ["ro", "Română"]];
 
@@ -87,6 +96,10 @@ const TAB_DEFS = [
 const state = {
   view: "activity",
   period: "Monthly",
+  // Analytics keeps its own period, and starts with none: no preselected
+  // window, just everything logged so far. The other tabs are month-shaped
+  // by nature; Analytics is the one that's meant to look across all of it.
+  analyticsPeriod: null,
   anchor: new Date(), // the day/week/month/year the chosen period is centred on
   kind: "Expenses",
   selCat: null, // category id driving the detail ring
@@ -111,8 +124,8 @@ const data = {
   goals: [],
   accounts: [],
   prevTotal: null, // same-length previous range, for the "x% from ..." delta
-  months12: null, // lazily loaded, only the Analytics tab needs it
-  expenses12: null, // the rows behind months12, for Analytics' own list
+  analyticsBuckets: null, // lazily loaded, only the Analytics tab needs it
+  analyticsExpenses: null, // the rows behind those buckets, for Analytics' own list
 };
 
 let currentCurrency = "USD";
@@ -130,15 +143,22 @@ function currencySymbol(code) {
   return found ? found[1] : code;
 }
 
+// Puts the currency on whichever side it belongs on for the active currency,
+// so every amount on screen - totals, keypad, targets - agrees.
+function withCurrency(text, code = currentCurrency) {
+  const symbol = currencySymbol(code);
+  return SUFFIX_CURRENCIES.has(code) ? `${text} ${symbol}` : symbol + text;
+}
+
 // Whole amounts lose the ".00" so the design's big numerals read as designed;
 // anything with cents keeps them rather than silently rounding real money.
 function fmt(amount) {
   const n = Number(amount) || 0;
   const decimals = Math.abs(n % 1) < 0.005 ? 0 : 2;
-  return currencySymbol(currentCurrency) + n.toLocaleString(localeForLang(), {
+  return withCurrency(n.toLocaleString(localeForLang(), {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  });
+  }));
 }
 
 function fmtK(n) {
@@ -213,9 +233,37 @@ function daysBetween(a, b) {
   return Math.round((b - a) / 86400000) + 1;
 }
 
-function getToken() { return localStorage.getItem(TOKEN_KEY); }
-function setToken(value) { localStorage.setItem(TOKEN_KEY, value); }
-function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+// The token lands in localStorage when "save my login info" is on (survives
+// closing the browser) and sessionStorage when it's off (dies with the tab).
+// Reads check both, so flipping the switch never strands a live session in a
+// store nothing looks at. Default is on, which is what this app always did.
+function rememberMe() { return localStorage.getItem(REMEMBER_KEY) !== "0"; }
+
+function setRememberMe(on) {
+  localStorage.setItem(REMEMBER_KEY, on ? "1" : "0");
+  const token = getToken();
+  clearToken();
+  if (token) setToken(token);  // re-home the current session into the right store
+  if (!on) localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+}
+
+function getToken() { return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY); }
+
+function setToken(value) {
+  clearToken();
+  (rememberMe() ? localStorage : sessionStorage).setItem(TOKEN_KEY, value);
+}
+
+function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
+}
+
+function rememberedEmail() { return rememberMe() ? localStorage.getItem(REMEMBERED_EMAIL_KEY) || "" : ""; }
+
+function rememberEmail(email) {
+  if (rememberMe()) localStorage.setItem(REMEMBERED_EMAIL_KEY, email);
+}
 
 // --- the selected range --------------------------------------------------
 
@@ -293,6 +341,14 @@ function previousLabel(period, prev) {
 
 function currentRange() {
   return rangeFor(state.period, state.anchor);
+}
+
+// No period chosen on Analytics means no lower bound at all. The upper bound
+// is the end of the current month so a range query is still well-formed.
+function analyticsRange() {
+  if (state.analyticsPeriod) return rangeFor(state.analyticsPeriod, state.anchor);
+  const today = new Date();
+  return { start: new Date(1970, 0, 1), end: new Date(today.getFullYear(), today.getMonth() + 1, 0) };
 }
 
 // --- API -----------------------------------------------------------------
@@ -440,7 +496,7 @@ function matchesQuery(expense) {
 // is presentational, so each row just carries its own corner radius and
 // divider rather than being nested in a per-day wrapper.
 function visibleExpenses() {
-  return state.view === "analytics" && data.expenses12 ? data.expenses12 : data.expenses;
+  return state.view === "analytics" && data.analyticsExpenses ? data.analyticsExpenses : data.expenses;
 }
 
 function transactionRows() {
@@ -486,8 +542,7 @@ function incomeRows() {
 // One bar per day while the range is short enough to read; longer ranges
 // (a year, the trailing twelve months) bucket by month instead, so the block
 // never tries to draw 365 three-pixel bars.
-function spendSeries() {
-  const range = currentRange();
+function seriesFor(range, expenses) {
   const span = daysBetween(range.start, range.end);
   const byMonth = span > 62;
 
@@ -506,12 +561,16 @@ function spendSeries() {
   }
 
   const index = new Map(buckets.map((b, i) => [b.key, i]));
-  data.expenses.forEach((e) => {
+  expenses.forEach((e) => {
     const key = byMonth ? e.date.slice(0, 7) : e.date;
     if (index.has(key)) buckets[index.get(key)].value += e.amount;
   });
 
   return { buckets, byMonth };
+}
+
+function spendSeries() {
+  return seriesFor(currentRange(), data.expenses);
 }
 
 // Five evenly spaced labels along the x axis, matching the design's 1/9/16/24/31.
@@ -571,10 +630,12 @@ function pillsHtml(options) {
   parts.push(`<button class="pill" data-action="toggle-kind">${esc(t(state.kind === "Income" ? "income" : "expenses"))}</button>`);
 
   if (options.fixedPeriodLabel) {
+    // A period that can be cleared back off carries the ✕; the unfiltered
+    // default (Analytics' "All time") is just a plain pill with nothing to clear.
     parts.push(`<button class="pill pill-outline" data-action="open-period">${esc(options.fixedPeriodLabel)}
-      <span class="pill-outline-x">✕</span></button>`);
+      <span class="pill-outline-x" data-action="clear-period">✕</span></button>`);
   } else {
-    parts.push(`<button class="pill" data-action="open-period">${esc(t(periodKey(state.period)))}</button>`);
+    parts.push(`<button class="pill" data-action="open-period">${esc(options.periodLabel || t(periodKey(state.period)))}</button>`);
   }
 
   parts.push(`<button class="pill" data-action="go-accounts">${esc(t("allAccounts"))}</button>`);
@@ -780,20 +841,21 @@ function budgetView() {
 }
 
 function analyticsView() {
-  if (!data.months12) {
+  if (!data.analyticsBuckets) {
     return `<div class="view"><p class="empty-note">${esc(t("loading"))}</p></div>`;
   }
-  const series = { buckets: data.months12, byMonth: true };
-  const total = data.months12.reduce((sum, b) => sum + b.value, 0);
+  const series = data.analyticsBuckets;
+  const total = series.buckets.reduce((sum, b) => sum + b.value, 0);
+  const label = state.analyticsPeriod ? t(periodKey(state.analyticsPeriod)) : t("allTime");
 
   return `
     <div class="view">
       <div class="hero">
-        <div style="color:var(--text-muted);font-size:15px">${esc(t("last12Months"))}</div>
+        <div style="color:var(--text-muted);font-size:15px">${esc(label)}</div>
         <div class="hero-amount-sm">${esc(fmt(total))}</div>
       </div>
-      ${chartBlock(series, { months: true, roundScale: true, k: true })}
-      ${pillsHtml({ search: true, fixedPeriodLabel: t("last12Months") })}
+      ${chartBlock(series, { months: series.byMonth, roundScale: true, k: true })}
+      ${pillsHtml({ search: true, fixedPeriodLabel: state.analyticsPeriod ? label : null, periodLabel: label })}
       ${transactionListHtml()}
     </div>`;
 }
@@ -894,11 +956,20 @@ function optionCard(options) {
 }
 
 function periodSheet() {
+  // On Analytics the list gains "All time" at the top - that tab's default is
+  // no period at all, so it needs a way back to it once one has been picked.
+  const analytics = state.view === "analytics";
+  const options = analytics
+    ? [{ action: "set-period", value: "", label: t("allTime"), selected: !state.analyticsPeriod }]
+    : [];
+  const active = analytics ? state.analyticsPeriod : state.period;
+  options.push(...PERIODS.map((p) => ({
+    action: "set-period", value: p, label: t(periodKey(p)), selected: active === p,
+  })));
+
   return sheetShell(`
     <div class="sheet-title">${esc(t("groupByPeriod"))}</div>
-    ${optionCard(PERIODS.map((p) => ({
-      action: "set-period", value: p, label: t(periodKey(p)), selected: state.period === p,
-    })))}
+    ${optionCard(options)}
     <button class="btn-primary" style="width:100%" data-action="close-sheet">${esc(t("done"))}</button>`);
 }
 
@@ -915,7 +986,7 @@ function addSheet() {
 
   return sheetShell(`
     <div class="sheet-caption">${esc(t("enterAmount"))}</div>
-    <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(currencySymbol(currentCurrency) + (state.amount || "0"))}</div>
+    <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(withCurrency(state.amount || "0"))}</div>
     <div class="cat-pill-row">${pills || `<span class="note">${esc(t("noCategoriesYet"))}</span>`}</div>
     <div class="keypad">${keys}</div>
     <div class="sheet-btn-row" style="margin-top:0">
@@ -1249,31 +1320,27 @@ async function loadRange() {
   }
 }
 
-async function loadMonths12() {
-  const end = new Date();
-  const start = new Date(end.getFullYear(), end.getMonth() - 11, 1);
-  const last = new Date(end.getFullYear(), end.getMonth() + 1, 0);
-  const expenses = await apiFetch(`/api/expenses?start=${isoDate(start)}&end=${isoDate(last)}`);
-  data.expenses12 = expenses;
+async function loadAnalytics() {
+  const range = analyticsRange();
+  const expenses = await apiFetch(`/api/expenses?${rangeQuery(range)}`);
+  data.analyticsExpenses = expenses;
 
-  const buckets = [];
-  for (let i = 0; i < 12; i++) {
-    const month = new Date(start.getFullYear(), start.getMonth() + i, 1);
-    buckets.push({ key: periodOf(month), label: monthName(month, "short"), value: 0 });
+  // With no period chosen the range reaches back to 1970, which would draw
+  // hundreds of empty buckets - so the chart starts at the earliest expense
+  // there actually is, and falls back to this month when there are none.
+  let start = range.start;
+  if (!state.analyticsPeriod) {
+    const earliest = expenses.reduce((min, e) => (min && min <= e.date ? min : e.date), null);
+    start = earliest ? parseDate(earliest) : new Date(range.end.getFullYear(), range.end.getMonth(), 1);
   }
-  const index = new Map(buckets.map((b, i) => [b.key, i]));
-  expenses.forEach((e) => {
-    const key = e.date.slice(0, 7);
-    if (index.has(key)) buckets[index.get(key)].value += e.amount;
-  });
-  data.months12 = buckets;
+  data.analyticsBuckets = seriesFor({ start, end: range.end }, expenses);
 }
 
-async function refresh({ identity = false, months = false } = {}) {
+async function refresh({ identity = false, analytics = false } = {}) {
   try {
     const jobs = [loadRange()];
     if (identity) jobs.push(loadIdentity());
-    if (months || state.view === "analytics") jobs.push(loadMonths12());
+    if (analytics || state.view === "analytics") jobs.push(loadAnalytics());
     await Promise.all(jobs);
     state.error = "";
   } catch (err) {
@@ -1349,14 +1416,14 @@ async function runImport() {
   }
   state.sheet = null;
   state.error = "";
-  await refresh({ identity: true, months: true });
+  await refresh({ identity: true, analytics: true });
 }
 
 const ACTIONS = {
   "set-view": (el) => {
     state.view = el.dataset.value;
     if (state.view === "summary") state.selCat = null;
-    if (state.view === "analytics" && !data.months12) return refresh();
+    if (state.view === "analytics" && !data.analyticsBuckets) return refresh();
   },
   "go-accounts": () => { state.view = "accounts"; },
   "go-summary": () => { state.view = "summary"; state.selCat = null; },
@@ -1372,8 +1439,17 @@ const ACTIONS = {
     return refresh();
   },
   "open-period": () => { state.sheet = "period"; },
+  "clear-period": async () => {
+    if (state.view !== "analytics") return;
+    state.analyticsPeriod = null;
+    return refresh();
+  },
   "set-period": async (el) => {
-    state.period = el.dataset.value;
+    if (state.view === "analytics") {
+      state.analyticsPeriod = el.dataset.value || null;  // "" is the All time row
+    } else {
+      state.period = el.dataset.value;
+    }
     return refresh();
   },
   "open-add": () => {
@@ -1627,6 +1703,10 @@ function showOnlyScreen(screen) {
 function showAuthScreen() {
   showOnlyScreen(authScreen);
   document.getElementById("auth-error").textContent = "";
+  const emailInput = document.getElementById("email");
+  if (!emailInput.value) emailInput.value = rememberedEmail();
+  rememberCheckbox.checked = rememberMe();
+  loadOauthProviders();
 }
 
 async function showAppScreen() {
@@ -1646,6 +1726,10 @@ async function afterLogin() {
 const authForm = document.getElementById("auth-form");
 const authError = document.getElementById("auth-error");
 const authSubmit = document.getElementById("auth-submit");
+const rememberCheckbox = document.getElementById("remember-me");
+
+rememberCheckbox.checked = rememberMe();
+rememberCheckbox.addEventListener("change", () => setRememberMe(rememberCheckbox.checked));
 
 document.getElementById("switch-link").addEventListener("click", () => {
   mode = mode === "login" ? "signup" : "login";
@@ -1669,11 +1753,77 @@ authForm.addEventListener("submit", async (event) => {
       return;
     }
     setToken(res.access_token);
+    rememberEmail(email);
     await afterLogin();
   } catch (err) {
     authError.textContent = err.message;
   }
 });
+
+// --- social sign-in ------------------------------------------------------
+// The buttons are drawn from whatever the backend has credentials for, so a
+// deploy with none configured shows the plain email form and nothing else.
+
+const OAUTH_ICONS = {
+  google: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5a5.6 5.6 0 01-2.4 3.6v3h3.9c2.3-2.1 3.5-5.2 3.5-8.8z"/><path fill="#34A853" d="M12 24c3.2 0 5.9-1.1 7.9-2.9l-3.9-3a7.2 7.2 0 01-10.7-3.8h-4v3.1A12 12 0 0012 24z"/><path fill="#FBBC05" d="M5.3 14.3a7.1 7.1 0 010-4.6V6.6h-4a12 12 0 000 10.8l4-3.1z"/><path fill="#EA4335" d="M12 4.8c1.8 0 3.4.6 4.6 1.8l3.5-3.5A12 12 0 001.3 6.6l4 3.1A7.2 7.2 0 0112 4.8z"/></svg>`,
+  apple: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.4 12.7c0-2.5 2-3.7 2.1-3.8-1.2-1.7-3-1.9-3.6-2-1.5-.2-3 .9-3.8.9-.8 0-2-.9-3.3-.8-1.7 0-3.2 1-4.1 2.5-1.7 3-.4 7.5 1.3 10 .8 1.2 1.8 2.5 3.1 2.5 1.2 0 1.7-.8 3.2-.8s1.9.8 3.2.8c1.3 0 2.2-1.2 3-2.4a11 11 0 001.4-2.8c-.1 0-2.6-1-2.6-4.1zM14.2 4.6c.7-.8 1.1-2 1-3.1-1 0-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.6 2.9-1.4z"/></svg>`,
+  github: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.2 1.9 1.2 1.1 1.9 2.9 1.3 3.6 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 016 0C17.4 5.2 18.4 5.5 18.4 5.5c.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0012 .5z"/></svg>`,
+};
+
+let oauthProvidersLoaded = false;
+
+async function loadOauthProviders() {
+  if (oauthProvidersLoaded) return;
+  oauthProvidersLoaded = true;
+
+  let providers = [];
+  try {
+    providers = (await apiFetch("/api/auth/providers")).providers || [];
+  } catch {
+    return;  // backend asleep or older than this build - the email form still works
+  }
+  if (!providers.length) return;
+
+  document.getElementById("oauth-buttons").innerHTML = providers.map((p) => `
+    <button type="button" class="oauth-btn" data-provider="${esc(p.name)}">
+      ${OAUTH_ICONS[p.name] || ""}<span>${esc(t("continueWithProvider", { provider: p.label }))}</span>
+    </button>`).join("");
+  document.getElementById("oauth-block").classList.remove("hidden");
+
+  document.querySelectorAll("#oauth-buttons .oauth-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      // Come back to this page with no hash of its own - the backend appends
+      // the token there, and a leftover fragment would collide with it.
+      const back = window.location.href.split("#")[0];
+      window.location.href =
+        `${window.API_BASE_URL}/api/auth/oauth/${encodeURIComponent(button.dataset.provider)}`
+        + `/start?redirect_uri=${encodeURIComponent(back)}`;
+    });
+  });
+}
+
+// A social sign-in lands back here with the token (or an error) in the URL
+// fragment. Take it, then scrub the address bar so the token isn't sitting in
+// history or in whatever the user pastes next.
+function consumeOauthRedirect() {
+  const hash = new URLSearchParams(window.location.hash.slice(1));
+  const token = hash.get("token");
+  const error = hash.get("oauth_error");
+  if (!token && !error) return false;
+
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  if (error) {
+    showAuthScreen();
+    authError.textContent = error || t("errOauthFailed");
+    return true;
+  }
+  setToken(token);
+  afterLogin().catch((err) => {
+    showAuthScreen();
+    authError.textContent = err.message;
+  });
+  return true;
+}
 
 document.getElementById("otp-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1765,7 +1915,9 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
 }
 
-if (getToken()) {
+if (consumeOauthRedirect()) {
+  // handled - afterLogin() or the auth screen is already on its way
+} else if (getToken()) {
   afterLogin().catch(() => showAuthScreen());
 } else {
   showAuthScreen();

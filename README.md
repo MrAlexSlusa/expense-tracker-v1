@@ -35,15 +35,31 @@ with anything else.
 | **Activity** | Period total and its change from the previous period, a spend-per-day bar chart with an average line, filter pills, and transactions grouped by day. The search pill filters live on name and category. |
 | **Summary** | A donut of the period's spend, and the categories ranked by amount with their share as a percentage. Tapping one drills into a single-category ring. |
 | **Budget** | Spend against `of $X planned · day N of M`, the Wants/Needs/Savings goal split, and a progress bar per category that turns red past its target. |
-| **Analytics** | The trailing twelve months as monthly bars, with that range's transactions below it. |
+| **Analytics** | Spend over time as bars, with that range's transactions below it. Unlike the other tabs it starts with **no** period filter — all time, from the earliest expense to now — and keeps its own period selection, so narrowing Analytics doesn't move Activity or Budget with it. |
 | **Accounts** | Profile, six stat cells from `/api/me/stats`, settings, the accounts you spend from, and log out. |
 
 The floating **+** opens a keypad sheet that logs an expense; tapping a
 transaction opens a sheet with its date, account and category, and a delete.
 
 **Periods.** The period sheet offers Daily / Weekly / Monthly / Yearly /
-Last 12 months. Anything that isn't a calendar month resolves to an explicit
+Last 12 months, plus **All time** on Analytics, which is where that tab
+starts. Anything that isn't a calendar month resolves to an explicit
 `start`/`end` pair, which every read endpoint accepts alongside `period`.
+Ranges longer than about two months draw one bar per month; shorter ones draw
+one per day.
+
+**Currency placement.** Most currencies are written symbol-first (`$9`), but
+some belong after the amount in their own convention — RON renders as `9 lei`,
+never `lei9`. `SUFFIX_CURRENCIES` in `web/app.js` is the list; everything that
+prints an amount (totals, keypad, targets, transaction rows) goes through the
+same `fmt()`/`withCurrency()` pair, so there's one place to add to.
+
+**Staying logged in.** The "Save my login info" checkbox on the login screen
+decides where the JWT is kept: `localStorage` when it's on (survives closing
+the browser, which is the default and what the app always did) or
+`sessionStorage` when it's off (gone when the tab closes). Reads check both,
+so flipping it mid-session re-homes the live token rather than logging anyone
+out, and turning it off also forgets the remembered email.
 
 **Categories, income and profile** are edited from rows in Accounts →
 Settings, since the design covers the five tabs but not the management
@@ -88,7 +104,9 @@ On a phone, open that same URL in the browser and use "Add to Home Screen" (Safa
 - `POST /api/auth/forgot-password` — `{"email": ...}`, emails a reset code. Always returns `{"sent": true}` regardless of whether the email exists, so this can't be used to check who has an account.
 - `POST /api/auth/reset-password` — `{"email": ..., "code": ..., "new_password": ...}`.
 - `PUT /api/me/two-factor` — `{"enabled": true|false}` (needs `Authorization: Bearer <token>`). When on, every login emails a 6-digit code that has to be verified before a JWT is issued.
-- `GET /api/me` — current user, including `two_factor_enabled` and `onboarded`.
+- `GET /api/me` — current user, including `two_factor_enabled`, `onboarded`, `oauth_provider` and `has_password`.
+- `GET /api/auth/providers` — which social sign-in buttons the login screen should draw. Empty until credentials are configured (see below).
+- `GET /api/auth/oauth/{provider}/start?redirect_uri=...` → 302 to Google/Apple/GitHub; `GET|POST /api/auth/oauth/{provider}/callback` → 302 back to `redirect_uri` with the app JWT in the URL fragment (`#token=...`), or `#oauth_error=...`.
 - `GET /api/quiz` — the onboarding quiz's questions/options (text only — the tag weights used for scoring stay server-side).
 - `POST /api/onboarding/complete` — `{"answers": {"weekend": "food", ...}}`, replaces the signup-time placeholder category with the 5 quiz-picked ones and marks the account onboarded.
 - `GET /api/budget` — this user's budget categories and running totals (the in-app version of the Google Sheet mirror — no Google Sheets setup required for the app to work).
@@ -99,6 +117,32 @@ On a phone, open that same URL in the browser and use "Add to Home Screen" (Safa
 - `PUT /api/me/goals` / `GET /api/budget/goals` — the Wants/Needs/Savings target split (must sum to 100%) and, per period, the actual split computed from tagged categories' spend — the app's version of a spreadsheet's GOALS/ACTUAL block.
 - `GET/POST/PUT/DELETE /api/income` — named income lines for a period (`?period=YYYY-MM`), mirroring a spreadsheet's INCOME column.
 - `POST /api/import/spreadsheet` — upload (`multipart/form-data`) an `.xlsx`/`.csv` export shaped like a personal budget sheet (two parallel INCOME / SPENDINGS+tag tables, plus an optional GOALS block); populates categories (with Needs/Wants/Savings tags), that period's expenses, income rows, and the goal split in one call. Re-importing the same period replaces rather than duplicates. See `app/importer.py` for the parsing rules.
+
+### Setting up social sign-in (optional)
+
+Google, Apple and GitHub are a third way into the same accounts, alongside email/password and the WhatsApp phone number. Each is independent: a provider's button only appears once its credentials are in the environment, and a deploy with none of them configured behaves exactly as it did before.
+
+The flow is server-side authorization code, not a browser-side implicit grant — the frontend is a static bundle on GitHub Pages and can't hold a client secret, so the backend does the exchange and hands back its own JWT. Accounts are matched on **verified** email, so signing in with Google to an address that already has a password gets that same account, not a second one. New social accounts get no password and still run the onboarding quiz.
+
+Two environment variables apply to all providers:
+
+- `OAUTH_ALLOWED_ORIGINS` — comma-separated origins allowed to receive a finished sign-in (e.g. `https://mralexslusa.github.io`). localhost is always allowed. This is a separate list from CORS on purpose: CORS governs who may *read* a response, while a redirect target receives the token in the URL, so an unvalidated one would be an open door.
+- `OAUTH_CALLBACK_BASE_URL` — only needed if the backend sits behind a proxy that rewrites its own URL; otherwise the callback is derived from the incoming request.
+
+Each provider needs this exact callback URL registered on its side:
+
+```
+<backend base URL>/api/auth/oauth/<provider>/callback
+```
+
+| Provider | Where to register | Environment variables |
+| --- | --- | --- |
+| Google | [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials → OAuth client ID (Web application) | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
+| GitHub | [github.com/settings/developers](https://github.com/settings/developers) → New OAuth App | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` |
+| Apple | [developer.apple.com](https://developer.apple.com) → Certificates, IDs & Profiles → Services ID + Sign in with Apple key. Needs a **paid** Apple Developer account ($99/yr) | `APPLE_CLIENT_ID` (the Services ID, not the App ID), `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (the `.p8` contents, newlines as literal `
+`) |
+
+Apple is the odd one out twice over: it has no static client secret (one is minted per request as an ES256 JWT signed with the `.p8` key), and it answers with `response_mode=form_post`, which is why its callback accepts POST as well as GET.
 
 ### Setting up real OTP emails (optional)
 

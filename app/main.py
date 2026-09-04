@@ -14,6 +14,7 @@ Base.metadata.create_all(bind=engine)
 # Added after the first deploy, so databases created before it need the
 # column backfilled - create_all only ever creates whole tables.
 ensure_columns(table="expenses", columns={"account_id": "INTEGER"})
+ensure_columns(table="users", columns={"oauth_provider": "VARCHAR", "oauth_sub": "VARCHAR"})
 
 app = FastAPI(title="WhatsApp Expense Tracker")
 
