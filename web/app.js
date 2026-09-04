@@ -891,6 +891,7 @@ function accountsView() {
   const settingsRows = [
     ["open-currency", t("currency"), me.currency || "USD"],
     ["open-language", t("language"), langName],
+    ["open-timezone", t("timeZone"), me.timezone || t("timeZoneUtc")],
     ["open-theme", t("theme"), t(settings.theme)],
     ["open-twofactor", t("twoFactor"), t(me.two_factor_enabled ? "on" : "off")],
     ["open-categories", t("categories"), String(data.categories.length)],
@@ -1035,6 +1036,57 @@ function currencySheet() {
       action: "set-currency", value: code, label: `${code}  ${symbol}`,
       selected: (data.me && data.me.currency) === code,
     })))}`);
+}
+
+// The browser knows every IANA zone and which one this device is in, so the
+// picker is a plain select rather than a hand-kept list that would go stale.
+// supportedValuesOf is recent enough to be worth a fallback: without it, the
+// detected zone plus a short spread of common ones still lets someone choose.
+function knownTimeZones() {
+  try {
+    const all = Intl.supportedValuesOf("timeZone");
+    if (all && all.length) return all;
+  } catch {}
+  return ["UTC", "Europe/London", "Europe/Bucharest", "Europe/Paris", "Europe/Madrid",
+          "America/New_York", "America/Chicago", "America/Los_Angeles", "America/Sao_Paulo",
+          "Asia/Dubai", "Asia/Kolkata", "Asia/Tokyo", "Australia/Sydney"];
+}
+
+function detectedTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    return "";
+  }
+}
+
+function timeZoneSheet() {
+  const current = (data.me && data.me.timezone) || "";
+  const detected = detectedTimeZone();
+  const zones = knownTimeZones();
+  // A zone the browser doesn't list (an old name, or a value set elsewhere)
+  // still has to appear, or opening the sheet would silently change it.
+  const options = zones.includes(current) || !current ? zones : [current, ...zones];
+
+  return sheetShell(`
+    <div class="sheet-title">${esc(t("timeZone"))}</div>
+    <p class="sheet-hint">${esc(t("timeZoneHint"))}</p>
+    ${detected && detected !== current ? `
+      <button class="btn-secondary" style="width:100%;margin-bottom:14px"
+        data-action="set-timezone" data-value="${esc(detected)}">
+        ${esc(t("useDetectedZone", { zone: detected }))}
+      </button>` : ""}
+    <label class="field"><span>${esc(t("timeZone"))}</span>
+      <select id="timezone-select">
+        <option value=""${current ? "" : " selected"}>${esc(t("timeZoneUtc"))}</option>
+        ${options.map((z) => `<option value="${esc(z)}"${z === current ? " selected" : ""}>${esc(z)}</option>`).join("")}
+      </select>
+    </label>
+    <div class="sheet-btn-row">
+      <button class="btn-secondary" data-action="close-sheet">${esc(t("cancel"))}</button>
+      <button class="btn-primary" data-action="save-timezone">${esc(t("save"))}</button>
+    </div>
+    <p class="error">${esc(state.error)}</p>`, { persistent: true });
 }
 
 function languageSheet() {
@@ -1255,6 +1307,7 @@ const SHEETS = {
   add: addSheet,
   tx: txSheet,
   currency: currencySheet,
+  timezone: timeZoneSheet,
   language: languageSheet,
   theme: themeSheet,
   twofactor: twoFactorSheet,
@@ -1453,6 +1506,18 @@ async function runImport() {
   await refresh({ identity: true, analytics: true });
 }
 
+// Changing the zone re-files existing expenses onto different calendar days, so
+// everything on screen has to be refetched rather than just re-rendered.
+async function saveTimeZone(zone) {
+  await apiFetch("/api/me/timezone", {
+    method: "PUT",
+    body: JSON.stringify({ timezone: zone || "" }),
+  });
+  state.sheet = null;
+  state.error = "";
+  return refresh({ identity: true, analytics: true });
+}
+
 const ACTIONS = {
   "set-view": (el) => {
     state.view = el.dataset.value;
@@ -1526,6 +1591,13 @@ const ACTIONS = {
   "close-sheet": () => { state.sheet = null; state.error = ""; },
 
   "open-currency": () => { state.sheet = "currency"; },
+  "open-timezone": () => { state.sheet = "timezone"; state.error = ""; },
+
+  "set-timezone": async (el) => saveTimeZone(el.dataset.value),
+  "save-timezone": async () => {
+    const select = document.getElementById("timezone-select");
+    return saveTimeZone(select ? select.value : "");
+  },
   "set-currency": async (el) => {
     await apiFetch("/api/me/currency", { method: "PUT", body: JSON.stringify({ currency: el.dataset.value }) });
     currentCurrency = el.dataset.value;

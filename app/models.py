@@ -17,6 +17,10 @@ class User(Base):
     email = Column(String, unique=True, nullable=True, index=True)
     hashed_password = Column(String, nullable=True)
     currency = Column(String, nullable=False, default="USD")
+    # IANA name, e.g. "Europe/Bucharest". Null means never set, treated as UTC.
+    # Expenses are always stored in UTC; this is only ever used to decide which
+    # calendar day a stored instant falls on for the person reading it.
+    timezone = Column(String, nullable=True)
     two_factor_enabled = Column(Boolean, nullable=False, default=False)
     onboarded = Column(Boolean, nullable=False, default=False)  # false until the signup quiz picks their categories
     created_at = Column(DateTime, default=datetime.utcnow)

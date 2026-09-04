@@ -125,6 +125,10 @@ class CurrencyUpdateRequest(BaseModel):
     currency: str
 
 
+class TimezoneUpdateRequest(BaseModel):
+    timezone: str  # an IANA name, or "" to fall back to UTC
+
+
 class ProfileUpdateRequest(BaseModel):
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None  # data URL; empty string clears it

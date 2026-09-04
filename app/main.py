@@ -15,6 +15,7 @@ Base.metadata.create_all(bind=engine)
 # column backfilled - create_all only ever creates whole tables.
 ensure_columns(table="expenses", columns={"account_id": "INTEGER"})
 ensure_columns(table="users", columns={"oauth_provider": "VARCHAR", "oauth_sub": "VARCHAR"})
+ensure_columns(table="users", columns={"timezone": "VARCHAR"})
 
 app = FastAPI(title="WhatsApp Expense Tracker")
 

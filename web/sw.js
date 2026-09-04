@@ -13,7 +13,7 @@
 // in practice - untranslated keys rendering as "allTime"). A new cache name
 // makes the activate handler drop the whole previous set at once, so the next
 // load is all-new or all-old, never a mix.
-const CACHE = "expense-tracker-shell-v15";
+const CACHE = "expense-tracker-shell-v16";
 const SHELL_FILES = ["./", "./index.html", "./style.css", "./app.js", "./i18n.js", "./config.js", "./manifest.json"];
 
 self.addEventListener("install", (event) => {

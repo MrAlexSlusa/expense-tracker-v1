@@ -1,5 +1,6 @@
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, time, timedelta, timezone as dt_timezone
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from calendar import monthrange
 from typing import Optional
 
@@ -33,6 +34,7 @@ from app.schemas import (
     CategoryCreateRequest,
     CategoryUpdateRequest,
     CurrencyUpdateRequest,
+    TimezoneUpdateRequest,
     ExpenseCreateRequest,
     ExpenseUpdateRequest,
     ProfileUpdateRequest,
@@ -48,10 +50,54 @@ router = APIRouter()
 MAX_AVATAR_DATA_URL_LENGTH = 700_000  # ~500KB image, base64-inflated ~1.37x, plus data-url prefix headroom
 
 
-def _month_bounds(period: Optional[str]) -> tuple[datetime, datetime]:
+UTC = dt_timezone.utc
+
+
+def user_zone(user: Optional[User]) -> object:
     """
-    Parses a "YYYY-MM" string (defaulting to the current month) into the
-    [start, end) datetime range used to filter expenses for that month.
+    The user's timezone, or UTC when it is unset or no longer a real IANA name.
+
+    Falling back rather than raising is deliberate: a stale or mistyped zone
+    should make dates slightly wrong, not make the whole app return 500s.
+    """
+    name = ((user.timezone if user is not None else None) or "").strip()
+    if not name:
+        return UTC
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return UTC
+
+
+def local_date(moment: datetime, zone) -> date:
+    """Which calendar day a stored (naive, UTC) instant falls on for the reader."""
+    return moment.replace(tzinfo=UTC).astimezone(zone).date()
+
+
+def today_for(user: Optional[User]) -> date:
+    """
+    Today as the user experiences it. The server's own date is never used: it
+    runs in UTC while the user may be hours ahead, so for part of every night
+    `date.today()` would name yesterday and log expenses to the wrong day.
+    """
+    return datetime.now(UTC).astimezone(user_zone(user)).date()
+
+
+def _utc_window(first: date, last: date, zone) -> tuple[datetime, datetime]:
+    """
+    The UTC instants bounding these calendar days *in `zone`*, as naive
+    datetimes to match how created_at is stored. A day is 00:00-23:59:59 local,
+    which is a window shifted by the offset once expressed in UTC.
+    """
+    start = datetime.combine(first, time.min, tzinfo=zone).astimezone(UTC).replace(tzinfo=None)
+    end = datetime.combine(last, time.max, tzinfo=zone).astimezone(UTC).replace(tzinfo=None)
+    return start, end
+
+
+def _month_bounds(period: Optional[str], user: Optional[User] = None) -> tuple[datetime, datetime]:
+    """
+    Parses a "YYYY-MM" string (defaulting to the user's current month) into the
+    [start, end] range used to filter expenses for that month.
     """
     if period:
         try:
@@ -59,13 +105,11 @@ def _month_bounds(period: Optional[str]) -> tuple[datetime, datetime]:
         except ValueError:
             raise HTTPException(status_code=400, detail="period must be in YYYY-MM format")
     else:
-        today = date.today()
+        today = today_for(user)
         year, month = today.year, today.month
 
-    start = datetime(year, month, 1)
     days_in_month = monthrange(year, month)[1]
-    end = datetime(year, month, days_in_month, 23, 59, 59)
-    return start, end
+    return _utc_window(date(year, month, 1), date(year, month, days_in_month), user_zone(user))
 
 
 def _periods_between(start: datetime, end: datetime) -> list[str]:
@@ -81,6 +125,7 @@ def _date_range(
     period: Optional[str] = None,
     start: Optional[str] = None,
     end: Optional[str] = None,
+    user: Optional[User] = None,
 ) -> tuple[datetime, datetime]:
     """
     The period sheet in the app offers ranges a single "YYYY-MM" can't
@@ -98,8 +143,8 @@ def _date_range(
             raise HTTPException(status_code=400, detail="start and end must be in YYYY-MM-DD format")
         if last < first:
             raise HTTPException(status_code=400, detail="end must not be before start")
-        return first, last.replace(hour=23, minute=59, second=59)
-    return _month_bounds(period)
+        return _utc_window(first.date(), last.date(), user_zone(user))
+    return _month_bounds(period, user)
 
 
 @router.get("/api/users/{phone_number}/expenses")
@@ -315,6 +360,7 @@ def get_me(user: User = Depends(get_current_user)):
         "id": user.id,
         "email": user.email,
         "currency": user.currency,
+        "timezone": user.timezone,
         "two_factor_enabled": user.two_factor_enabled,
         "onboarded": user.onboarded,
         "oauth_provider": user.oauth_provider,
@@ -396,13 +442,35 @@ def update_profile(
     return {"display_name": user.display_name, "avatar_url": user.avatar_url}
 
 
+@router.put("/api/me/timezone")
+def update_timezone(
+    payload: TimezoneUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Sets which timezone the user's calendar days are measured in. Stored
+    instants never change - this only affects which day they are counted under,
+    so switching zones re-files existing expenses rather than editing them.
+    """
+    name = payload.timezone.strip()
+    if name:
+        try:
+            ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise HTTPException(status_code=400, detail="Unknown time zone")
+    user.timezone = name or None
+    db.commit()
+    return {"timezone": user.timezone, "today": today_for(user).isoformat()}
+
+
 @router.get("/api/me/stats")
 def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     total_all_time = (
         db.query(func.sum(Expense.amount)).filter(Expense.user_id == user.id).scalar() or 0.0
     )
 
-    start, end = _month_bounds(None)
+    start, end = _month_bounds(None, user)
     total_this_month = (
         db.query(func.sum(Expense.amount))
         .filter(Expense.user_id == user.id, Expense.created_at >= start, Expense.created_at <= end)
@@ -428,12 +496,13 @@ def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_
         .first()
     )
 
+    zone = user_zone(user)
     dates_with_expenses = {
-        e.created_at.date()
+        local_date(e.created_at, zone)
         for e in db.query(Expense.created_at).filter(Expense.user_id == user.id).all()
     }
     streak = 0
-    cursor = date.today()
+    cursor = today_for(user)
     while cursor in dates_with_expenses:
         streak += 1
         cursor -= timedelta(days=1)
@@ -565,7 +634,7 @@ def send_chat_message(
     response = ChatMessageResponse(amount=parsed.amount, category=label)
 
     if matched is not None and matched.target is not None:
-        start, end = _month_bounds(None)
+        start, end = _month_bounds(None, user)
         spent = (
             db.query(func.sum(Expense.amount))
             .filter(Expense.user_id == user.id, Expense.category_id == matched.id)
@@ -595,7 +664,7 @@ def get_budget(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    start, end = _date_range(period, start, end)
+    start, end = _date_range(period, start, end, user)
     categories = db.query(BudgetCategory).filter(BudgetCategory.user_id == user.id).all()
 
     totals = dict(
@@ -636,7 +705,7 @@ def get_budget_goals(
     in that sheet's ACTUAL row) - so overspending relative to income shows
     up the same way it does there, including going over 100%.
     """
-    start, end = _date_range(period, start, end)
+    start, end = _date_range(period, start, end, user)
     rows = (
         db.query(BudgetCategory.tag, func.sum(Expense.amount))
         .join(Expense, Expense.category_id == BudgetCategory.id)
@@ -676,8 +745,9 @@ def list_budget_periods(user: User = Depends(get_current_user), db: Session = De
         .filter(Expense.user_id == user.id)
         .all()
     )
-    periods = {f"{d.year:04d}-{d.month:02d}" for (d,) in rows}
-    current = date.today()
+    zone = user_zone(user)
+    periods = {local_date(d, zone).strftime("%Y-%m") for (d,) in rows}
+    current = today_for(user)
     periods.add(f"{current.year:04d}-{current.month:02d}")
     return sorted(periods, reverse=True)
 
@@ -689,7 +759,7 @@ def get_yearly_graph(
     db: Session = Depends(get_db),
 ):
     """Total spend per month for one year - the data behind the Graph tab."""
-    year = year or date.today().year
+    year = year or today_for(user).year
     start = datetime(year, 1, 1)
     end = datetime(year, 12, 31, 23, 59, 59)
 
@@ -802,7 +872,7 @@ def _parse_date_or_400(date_str: Optional[str]) -> datetime:
         raise HTTPException(status_code=400, detail="date must be in YYYY-MM-DD format")
 
 
-def _expense_to_dict(e: Expense) -> dict:
+def _expense_to_dict(e: Expense, zone=UTC) -> dict:
     return {
         "id": e.id,
         "amount": e.amount,
@@ -812,7 +882,7 @@ def _expense_to_dict(e: Expense) -> dict:
         "account_id": e.account_id,
         "account_name": _account_label(e.account) if e.account else None,
         "note": e.raw_message,
-        "date": e.created_at.strftime("%Y-%m-%d"),
+        "date": local_date(e.created_at, zone).strftime("%Y-%m-%d"),
     }
 
 
@@ -824,7 +894,7 @@ def list_expenses_for_period(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    start, end = _date_range(period, start, end)
+    start, end = _date_range(period, start, end, user)
     expenses = (
         db.query(Expense)
         .filter(Expense.user_id == user.id, Expense.created_at >= start, Expense.created_at <= end)
@@ -834,7 +904,7 @@ def list_expenses_for_period(
         .order_by(Expense.created_at.desc(), Expense.id.desc())
         .all()
     )
-    return [_expense_to_dict(e) for e in expenses]
+    return [_expense_to_dict(e, user_zone(user)) for e in expenses]
 
 
 @router.post("/api/expenses")
@@ -867,7 +937,7 @@ def create_expense(
     db.add(expense)
     db.commit()
     db.refresh(expense)
-    return _expense_to_dict(expense)
+    return _expense_to_dict(expense, user_zone(user))
 
 
 @router.put("/api/expenses/{expense_id}")
@@ -906,7 +976,7 @@ def update_expense(
 
     db.commit()
     db.refresh(expense)
-    return _expense_to_dict(expense)
+    return _expense_to_dict(expense, user_zone(user))
 
 
 @router.delete("/api/expenses/{expense_id}")
@@ -1050,7 +1120,7 @@ def list_income(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    period = period or _current_period()
+    period = period or _current_period(user)
     rows = (
         db.query(IncomeSource)
         .filter(IncomeSource.user_id == user.id, IncomeSource.period == period)
@@ -1074,7 +1144,7 @@ def create_income(
         user_id=user.id,
         name=name,
         amount=payload.amount,
-        period=payload.period or _current_period(),
+        period=payload.period or _current_period(user),
     )
     db.add(income)
     db.commit()
@@ -1119,8 +1189,8 @@ def delete_income(
     return {"deleted": True}
 
 
-def _current_period() -> str:
-    today = date.today()
+def _current_period(user: Optional[User] = None) -> str:
+    today = today_for(user)
     return f"{today.year:04d}-{today.month:02d}"
 
 
@@ -1138,7 +1208,7 @@ async def import_spreadsheet(
     db: Session = Depends(get_db),
 ):
     content = await file.read()
-    period = period or guess_period_from_filename(file.filename or "") or _current_period()
+    period = period or guess_period_from_filename(file.filename or "") or _current_period(user)
 
     try:
         result = parse_workbook(content, file.filename or "")
@@ -1154,7 +1224,7 @@ async def import_spreadsheet(
 
     # Re-importing the same period replaces that period's prior import, so
     # running the same file twice doesn't double the totals.
-    period_start, period_end = _month_bounds(period)
+    period_start, period_end = _month_bounds(period, user)
     db.query(Expense).filter(
         Expense.user_id == user.id,
         Expense.source == "import",

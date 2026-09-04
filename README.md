@@ -50,6 +50,23 @@ starts. Anything that isn't a calendar month resolves to an explicit
 Ranges longer than about two months draw one bar per month; shorter ones draw
 one per day.
 
+**Time zones.** Every expense is stored as a UTC instant and always has been.
+What changed is that the *day* it counts under is now measured in the user's
+own zone, set from Accounts → Settings → Time zone (which offers the browser's
+detected zone in one tap). Unset means UTC.
+
+This matters more than it sounds. The app previously mixed two clocks: expenses
+were stamped with `datetime.utcnow()` while streaks, "this month" and default
+periods used `date.today()` — the *server's* local date. Those agree only when
+the server and the user are both on UTC. For a user at UTC+3, everything logged
+between midnight and 03:00 was filed to the previous day, so the streak read
+zero right after logging something, and an expense added just after midnight on
+the 1st landed in the previous month. `app/api.py` now has no bare
+`date.today()`: `today_for(user)`, `local_date()` and `_utc_window()` do the
+conversion, the last one because a calendar day in a user's zone is a UTC window
+shifted by the offset, which is what the queries actually filter on. A stale or
+misspelled zone degrades to UTC rather than erroring.
+
 **Currency placement.** Most currencies are written symbol-first (`$9`), but
 some belong after the amount in their own convention — RON renders as `9 lei`,
 never `lei9`. `SUFFIX_CURRENCIES` in `web/app.js` is the list; everything that
@@ -122,6 +139,7 @@ On a phone, open that same URL in the browser and use "Add to Home Screen" (Safa
 - `GET /api/budget` — this user's budget categories and running totals (the in-app version of the Google Sheet mirror — no Google Sheets setup required for the app to work).
 - `GET/POST/PUT/DELETE /api/accounts` — the accounts money is spent from (name, type, last 4 digits, balance, emoji). Descriptive only: the balance is a number you maintain, not a ledger derived from expenses, since most of what moves through a real account never passes through this app. Expenses optionally carry an `account_id`; deleting an account leaves its expenses intact and unattributed.
 - `GET /api/budget`, `GET /api/budget/goals` and `GET /api/expenses` also take `start` and `end` (`YYYY-MM-DD`, inclusive, given together) instead of `period`, for the ranges the app's period sheet offers that a single month can't express.
+- `PUT /api/me/timezone` — `{"timezone": "Europe/Bucharest"}`, an IANA name, or `""` for UTC. Validated against the system zone database; an unknown name is a 400.
 - `PUT /api/me/profile` — `{"display_name": ..., "avatar_url": ...}`, a small (<500KB) `data:image/...` URL for the profile picture.
 - `GET /api/me/stats` — total spent, this month's total, monthly average, top category, current daily streak, member-since date — the numbers behind the Profile screen.
 - `PUT /api/me/goals` / `GET /api/budget/goals` — the Wants/Needs/Savings target split (must sum to 100%) and, per period, the actual split computed from tagged categories' spend — the app's version of a spreadsheet's GOALS/ACTUAL block.
