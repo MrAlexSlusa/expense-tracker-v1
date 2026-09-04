@@ -43,6 +43,12 @@ class TwoFactorUpdateRequest(BaseModel):
     enabled: bool
 
 
+class DeleteAccountRequest(BaseModel):
+    # Required only for accounts that have a password; a social-only account
+    # has none to check, and the bearer token is the proof of identity there.
+    password: Optional[str] = None
+
+
 class OnboardingRequest(BaseModel):
     answers: dict[str, str]  # {question_id: option_id}
     lang: str = "en"

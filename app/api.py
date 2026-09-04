@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import User, Expense, BudgetCategory, IncomeSource, Account
+from app.models import User, Expense, BudgetCategory, IncomeSource, Account, OtpCode
 from app.utils import normalize_phone, best_category_match
 from app.auth import hash_password, verify_password, create_access_token, get_current_user, issue_otp, consume_otp
 from app.parser import parse_expense_message
@@ -26,6 +26,7 @@ from app.schemas import (
     ForgotPasswordRequest,
     ResetPasswordRequest,
     TwoFactorUpdateRequest,
+    DeleteAccountRequest,
     OnboardingRequest,
     ChatMessageRequest,
     ChatMessageResponse,
@@ -325,6 +326,48 @@ def get_me(user: User = Depends(get_current_user)):
         "savings_goal_pct": user.savings_goal_pct,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
+
+
+@router.delete("/api/me")
+def delete_account(
+    payload: Optional[DeleteAccountRequest] = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Erases the account and everything belonging to it. This is what the privacy
+    policy promises, so it deletes rather than deactivates - nothing is kept
+    behind a flag.
+
+    An account with a password has to re-enter it. The bearer token alone is a
+    weaker proof for something irreversible: it lives in browser storage for 30
+    days, so an unattended session would otherwise be enough to wipe the
+    account. A social-only account has no password to ask for, and its token is
+    all there is.
+    """
+    if user.hashed_password is not None:
+        if payload is None or not payload.password:
+            raise HTTPException(status_code=400, detail="Enter your password to delete your account")
+        if not verify_password(payload.password, user.hashed_password):
+            raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    user_id = user.id
+
+    # Expenses first: they point at budget_categories and accounts, so removing
+    # those before the rows referencing them would trip the foreign keys.
+    deleted = {
+        "expenses": db.query(Expense).filter(Expense.user_id == user_id).delete(synchronize_session=False),
+        "categories": db.query(BudgetCategory).filter(BudgetCategory.user_id == user_id).delete(synchronize_session=False),
+        "accounts": db.query(Account).filter(Account.user_id == user_id).delete(synchronize_session=False),
+        "income": db.query(IncomeSource).filter(IncomeSource.user_id == user_id).delete(synchronize_session=False),
+        "otp_codes": db.query(OtpCode).filter(OtpCode.user_id == user_id).delete(synchronize_session=False),
+    }
+    db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
+    db.commit()
+
+    # One commit for the lot, so a failure part-way leaves the account whole
+    # rather than half-erased.
+    return {"deleted": True, **deleted}
 
 
 # --- Profile: display name, avatar, and derived spending stats -------------

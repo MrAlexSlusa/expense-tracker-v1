@@ -107,6 +107,7 @@ On a phone, open that same URL in the browser and use "Add to Home Screen" (Safa
 - `POST /api/auth/reset-password` — `{"email": ..., "code": ..., "new_password": ...}`.
 - `PUT /api/me/two-factor` — `{"enabled": true|false}` (needs `Authorization: Bearer <token>`). When on, every login emails a 6-digit code that has to be verified before a JWT is issued.
 - `GET /api/me` — current user, including `two_factor_enabled`, `onboarded`, `oauth_provider` and `has_password`.
+- `DELETE /api/me` — erases the account and everything belonging to it (expenses, categories, accounts, income, OTP codes), in one transaction. An account with a password must re-send it in the body: a 30-day bearer token sitting in browser storage is too weak a proof for something irreversible. A social-only account has no password to ask for and deletes on the token alone.
 - `GET /api/auth/providers` — which social sign-in buttons the login screen should draw. Empty until credentials are configured (see below).
 - `GET /api/auth/oauth/{provider}/start?redirect_uri=...` → 302 to Google/Apple/GitHub; `GET|POST /api/auth/oauth/{provider}/callback` → 302 back to `redirect_uri` with the app JWT in the URL fragment (`#token=...`), or `#oauth_error=...`.
 - `GET /api/quiz` — the onboarding quiz's questions/options (text only — the tag weights used for scoring stay server-side).
@@ -249,7 +250,7 @@ python3 -m pytest tests/ -v
 6. **Loading and error states** — the design doesn't cover skeletons or error copy; failures currently surface as a message where one fits.
 7. **Multi-currency handling** — the account has a currency, but amounts are stored as plain numbers with no per-expense currency or conversion.
 8. **Apple sign-in** — the code path is written and unit-tested; it's waiting on a paid Apple Developer account. Google and GitHub are already live.
-9. **Self-service account deletion** — individual expenses, categories, accounts and income rows can be deleted, but there's no `DELETE /api/me`, so removing an account is a manual request. The privacy policy says so plainly rather than implying a button that isn't there. Worth building before any app-store submission, which requires it.
+9. **A delete-account button in the app** — `DELETE /api/me` exists and is tested, but nothing in `web/` calls it yet, so account deletion is still a request by email in practice. App-store submission requires the in-app route specifically, not just the endpoint.
 10. **Payments** — wire this in before polishing anything else.
 
 ## Setting up the Google Sheet (one-time)
