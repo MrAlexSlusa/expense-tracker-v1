@@ -15,9 +15,10 @@ accounts and free date ranges to back the new screens. See
 - `app/webhook.py` — receives WhatsApp messages in Twilio's exact webhook format and replies with a confirmation.
 - `app/api.py` — read endpoints: full expense list and a spend-by-category summary, per phone number; plus the app's auth/budget/quiz endpoints (see below).
 - `app/auth.py` — email/password accounts with JWT tokens, plus OTP helpers (login 2FA, password reset). Separate identity path from the WhatsApp phone-number flow, same User/Expense tables.
+- `app/oauth.py` — Google / Apple / GitHub sign-in as a third identity path onto the same User rows, matched on verified email. Server-side authorization-code flow, since a static frontend can't hold a client secret. Every provider is optional and self-configuring from environment variables — see setup below.
 - `app/email_sender.py` — sends OTP codes via [Resend](https://resend.com); if `RESEND_API_KEY` isn't set, it logs the email (and code) to the console instead of failing, so the whole flow is testable locally with no account needed.
 - `app/quiz.py` — the signup personality quiz: 4 questions map to tag-weighted scores over a category pool, picking 5 starting budget categories tailored to the answers instead of one generic fixed set.
-- `app/models.py` / `app/database.py` — SQLite for now; one line to swap to Postgres later. `ensure_columns` in `database.py` adds columns a database created by an earlier deploy is missing, since `create_all` only ever creates whole tables and there's no Alembic setup here.
+- `app/models.py` / `app/database.py` — SQLite locally, Postgres in production via `DATABASE_URL`; nothing else changes between the two. `ensure_columns` in `database.py` adds columns a database created by an earlier deploy is missing, since `create_all` only ever creates whole tables and there's no Alembic setup here. The engine uses `pool_pre_ping` — see [Why the pool pings](#why-the-pool-pings) for the failure it prevents.
 - `app/sheets.py` — mirrors each expense into a personal Google Sheet budget spreadsheet (see setup below). Optional — only used by the WhatsApp flow.
 - `web/` — an installable PWA (no build step, plain HTML/CSS/JS) served by FastAPI at `/app`. Stepping stone to a native App Store/Play Store app — see below.
 - 5 end-to-end tests simulating real Twilio-shaped requests through the full pipeline, plus unit tests for the category-matching logic.
@@ -139,10 +140,40 @@ Each provider needs this exact callback URL registered on its side:
 | --- | --- | --- |
 | Google | [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials → OAuth client ID (Web application) | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
 | GitHub | [github.com/settings/developers](https://github.com/settings/developers) → New OAuth App | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` |
-| Apple | [developer.apple.com](https://developer.apple.com) → Certificates, IDs & Profiles → Services ID + Sign in with Apple key. Needs a **paid** Apple Developer account ($99/yr) | `APPLE_CLIENT_ID` (the Services ID, not the App ID), `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (the `.p8` contents, newlines as literal `
-`) |
+| Apple | [developer.apple.com](https://developer.apple.com) → Certificates, IDs & Profiles → Services ID + Sign in with Apple key. Needs a **paid** Apple Developer account ($99/yr) | `APPLE_CLIENT_ID` (the Services ID, not the App ID), `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (the `.p8` contents, newlines as literal `\n`) |
 
 Apple is the odd one out twice over: it has no static client secret (one is minted per request as an ES256 JWT signed with the `.p8` key), and it answers with `response_mode=form_post`, which is why its callback accepts POST as well as GET.
+
+#### What's actually configured
+
+| Provider | State |
+| --- | --- |
+| Google | **Live and verified end to end.** Client "Expense Tracker" in the `n8n keys` GCP project, with the Render and `localhost:8000` callbacks registered. |
+| GitHub | **Live and verified end to end.** OAuth app "Expense Tracker", both callbacks on the one app — GitHub allows multiple redirect URIs, so unlike Google it needs only one app for prod and local. |
+| Apple | **Not set up.** The code path is written and unit-tested; it needs a paid Apple Developer account before there are credentials to configure. |
+
+Both live providers were tested by signing out and back in on the deployed
+app: each lands on the **existing** account matched by email rather than
+creating a second one, leaving expenses, currency, `onboarded` and a
+user-set display name untouched. That matching is the part worth re-testing
+if the flow is ever changed — getting it wrong silently orphans every
+expense behind a duplicate account.
+
+Two things about Google's consent screen are worth knowing before you touch it:
+
+- **It's shared per GCP project, not per client.** The app name shown on the
+  consent screen belongs to the project, so setting it here also changes what
+  any other OAuth client in the same project displays. If that matters, give
+  the tracker its own project instead.
+- **Publishing to production is blocked, deliberately parked.** The consent
+  screen is in **Testing**, which works for up to 100 hand-added test users
+  and is the right setting for a personal tracker. Going to production
+  requires an application home page, privacy policy link and terms of service
+  link on a **Google-authorized domain** — and `github.io` is on the public
+  suffix list, so Pages' hostname generally won't be accepted. That needs a
+  domain you own plus two new pages, not a config toggle. While unverified,
+  Google also shows the raw callback host (`expense-tracker-….onrender.com`)
+  on the consent screen rather than the app name.
 
 ### Setting up real OTP emails (optional)
 
@@ -170,6 +201,27 @@ Then check the summary:
 curl http://localhost:8000/api/users/whatsapp:+40712345678/summary
 ```
 
+## Why the pool pings
+
+`create_engine` in `app/database.py` sets `pool_pre_ping=True` and
+`pool_recycle=300`. Without them, the first request after a quiet spell dies
+with:
+
+```
+sqlalchemy.exc.OperationalError: (psycopg2.OperationalError)
+SSL connection has been closed unexpectedly
+```
+
+The managed Postgres drops connections that have been idle a while, and the
+pool has no way to know — it hands out a socket the server already closed and
+the query fails instead of reconnecting. On a free-tier service that sits idle
+between visits, that's a large share of its traffic, which makes it look
+random and intermittent rather than reproducible. `pool_pre_ping` checks a
+connection is alive before handing it out and transparently swaps in a fresh
+one; `pool_recycle` retires connections before they get old enough to be
+dropped. Neither does anything for SQLite locally, which is why this only ever
+showed up in production.
+
 ## Run the test suite
 
 ```bash
@@ -185,7 +237,9 @@ python3 -m pytest tests/ -v
 5. **Editing an expense in place** — the transaction sheet offers Close and Delete, per the design. `PUT /api/expenses/{id}` exists and is unused by the app.
 6. **Loading and error states** — the design doesn't cover skeletons or error copy; failures currently surface as a message where one fits.
 7. **Multi-currency handling** — the account has a currency, but amounts are stored as plain numbers with no per-expense currency or conversion.
-8. **Payments** — wire this in before polishing anything else.
+8. **Apple sign-in** — the code path is written and unit-tested; it's waiting on a paid Apple Developer account. Google and GitHub are already live.
+9. **A public consent screen for Google** — parked behind a custom domain plus a privacy policy and terms page; see [Setting up social sign-in](#setting-up-social-sign-in-optional). Testing mode covers a personal tracker fine.
+10. **Payments** — wire this in before polishing anything else.
 
 ## Setting up the Google Sheet (one-time)
 
@@ -219,6 +273,40 @@ At the start of a new month: create that month's new budget file, share it with 
 
 If a row doesn't update, check Render's Logs tab — the app prints exactly why (missing env vars, wrong permissions, sheet not shared, etc.) instead of failing silently.
 
+## Importing your monthly budget spreadsheets
+
+`POST /api/import/spreadsheet` (Accounts → Settings → Import spreadsheet in
+the app) backfills a month from an export of the budget sheets described
+above. This is how the app got its 2026 history: eight monthly sheets, Jan
+through Aug, each exported as CSV and imported in order.
+
+The source files live in Drive at **My Drive → Documents → [01] Spreadsheets
+→ [01] Budgeting → `<year>`**, one per month named `<year> <Mon> Budget`.
+Note the nesting is Spreadsheets *then* Budgeting, and both carry `[01]`
+prefixes — looking for a plain "Budgeting" folder finds nothing.
+
+Three things that will bite you if you don't know them:
+
+- **The period comes from the filename, not the sheet.** `guess_period_from_filename`
+  reads `2026 Aug Budget.csv` → `2026-08`. That's deliberate: the title cell
+  *inside* several of these sheets is a stale copy from the month they were
+  duplicated off (the Apr, Jun and Jul 2026 files all say "May Budget
+  Tracker" internally). Keep the filename right and ignore the title, or pass
+  `period` explicitly in the form.
+- **Import oldest-first.** A month whose sheet has no GOALS block leaves the
+  goal split at whatever the previous import set (Aug 2026 is one of these).
+  Chronological order means the most recent month with goals wins, which is
+  what you want.
+- **`"X has no amount - skipped"` warnings are usually correct.** These
+  spreadsheets are hand-edited and genuinely have blank amount cells
+  (Parcari, Vodafone and Cadouri in various months). The importer skips the
+  row and reports it rather than erroring on the whole file.
+
+Re-importing the same period replaces that period's previous import rather
+than doubling it, so a corrected sheet can just be uploaded again. Worth
+checking after an import: each month's total in the app should equal its
+sheet's own `TOTAL EXPENSES` / `TOTAL INCOME` cells.
+
 ## Deploying the frontend to GitHub Pages
 
 GitHub Pages only serves static files, so it can host `web/` (the PWA) but
@@ -244,6 +332,16 @@ requests from the Pages origin with no extra config. All asset paths in
 `web/` are relative, so the PWA works whether it's served at a domain root,
 a GitHub Pages project path (`/expense-tracker/`), or mounted at `/app` by
 the FastAPI app itself for local dev.
+
+**Bump `CACHE` in `web/sw.js` on any release that touches a shell file.** The
+service worker is network-first, which usually hides a stale cache — but a
+page loaded *while* a deploy is propagating can take some files from the
+network and others from the cache. That has happened in practice: a build ran
+new `app.js` against old `i18n.js` and rendered raw translation keys
+(`allTime` instead of "All time"). A new cache name makes the `activate`
+handler drop the whole previous set at once, so a load is all-new or all-old
+and never a mix. Anyone already running the PWA picks the new set up on their
+next reload.
 
 ## Your move
 
