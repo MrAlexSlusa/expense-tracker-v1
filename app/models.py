@@ -142,6 +142,18 @@ class Expense(Base):
     source = Column(String, nullable=True)  # "import" for spreadsheet-imported rows, None otherwise
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)  # which account it was paid from, if known
 
+    # An expense paid in a currency other than the account's default keeps
+    # both numbers. `amount` above is ALWAYS in the user's currency - every
+    # total, target and chart sums that column, so a mixed-currency ledger
+    # would otherwise add lei to euros. These three record what was actually
+    # spent, so the row can be shown as "€25 (131.31 lei)" and so a past
+    # conversion stays explainable after the rate has moved.
+    #
+    # All null for a same-currency expense, which is most of them.
+    original_amount = Column(Float, nullable=True)
+    original_currency = Column(String, nullable=True)
+    fx_rate = Column(Float, nullable=True)  # user-currency units per one original unit, at time of entry
+
     user = relationship("User", back_populates="expenses")
     matched_category = relationship("BudgetCategory", back_populates="expenses")
     account = relationship("Account", back_populates="expenses")

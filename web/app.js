@@ -24,6 +24,16 @@ const CURRENCIES = [
 // written after the amount in their own convention - "9 lei", never "lei9".
 const SUFFIX_CURRENCIES = new Set(["RON"]);
 
+// The currencies you can log an expense in, whatever your account default is.
+// Kept to the ones BNR quotes daily and people here actually hold - the point
+// is a fast tap while adding, not a second full currency list.
+const ENTRY_CURRENCIES = ["RON", "EUR", "USD", "GBP"];
+
+// Crypto has no place in the entry picker (you don't buy groceries in ETH),
+// but the rates page shows it, so it needs symbols of its own.
+const RATE_SYMBOLS = { EUR: "€", USD: "$", GBP: "£", BTC: "₿", ETH: "Ξ", RON: "lei" };
+const RATE_NAMES = { EUR: "Euro", USD: "US Dollar", GBP: "British Pound", BTC: "Bitcoin", ETH: "Ethereum" };
+
 const LANGUAGES = [["en", "English"], ["es", "Español"], ["fr", "Français"], ["ro", "Română"]];
 
 // The eight category colours from the design, keyed by the names the
@@ -108,6 +118,10 @@ const state = {
   q: "",
   amount: "", // keypad buffer
   addCatId: null,
+  addCurrency: null, // null = the account's own currency; otherwise an ENTRY_CURRENCIES code
+  convAmount: "", // the rates page's converter
+  convFrom: "EUR",
+  convTo: "RON",
   txId: null,
   editingCategoryId: null,
   editingAccountId: null,
@@ -126,6 +140,7 @@ const data = {
   prevTotal: null, // same-length previous range, for the "x% from ..." delta
   analyticsBuckets: null, // lazily loaded, only the Analytics tab needs it
   analyticsExpenses: null, // the rows behind those buckets, for Analytics' own list
+  rates: null, // the exchange-rates page payload, loaded only when that page is opened
 };
 
 let currentCurrency = "USD";
@@ -159,6 +174,30 @@ function fmt(amount) {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   }));
+}
+
+// Puts a symbol on a string that is not a finished number - the keypad buffer,
+// where "12." has to stay "12." while you are still typing it.
+function withCurrencyIn(text, code) {
+  const symbol = RATE_SYMBOLS[code] || currencySymbol(code);
+  return SUFFIX_CURRENCIES.has(code) ? `${text} ${symbol}` : symbol + text;
+}
+
+// Same shape as fmt(), but for a currency that isn't the account's - used
+// wherever an expense shows what was actually paid next to what it converted to.
+function fmtIn(amount, code) {
+  const n = Number(amount) || 0;
+  const decimals = Math.abs(n % 1) < 0.005 ? 0 : 2;
+  return withCurrencyIn(
+    n.toLocaleString(localeForLang(), { minimumFractionDigits: decimals, maximumFractionDigits: decimals }),
+    code,
+  );
+}
+
+// The currency an expense is being entered in right now: the picked one, or
+// the account's own when nothing has been picked.
+function entryCurrency() {
+  return state.addCurrency || currentCurrency;
 }
 
 function fmtK(n) {
@@ -611,6 +650,29 @@ function chartBlock(series, opts) {
     </div>`;
 }
 
+// --- exchange rates ------------------------------------------------------
+// The rates page and the add sheet's live preview read the same payload. The
+// backend converts independently when the expense is saved, so this is only
+// ever a preview - it can be missing (rates not loaded yet) without blocking
+// anything, which is why every caller checks ratesReady() first.
+
+function ratesReady() {
+  return !!(data.rates && data.rates.rates && data.rates.rates.length);
+}
+
+function ronPerUnit(code) {
+  if (code === "RON") return 1;
+  const row = (data.rates.rates || []).find((r) => r.currency === code);
+  return row ? row.ron : null;
+}
+
+function convertWithRates(amount, source, target) {
+  const from = ronPerUnit(source);
+  const to = ronPerUnit(target);
+  if (!from || !to) return null;
+  return amount * (from / to);
+}
+
 // --- shared view fragments ----------------------------------------------
 
 function deltaHtml(extraClass) {
@@ -669,9 +731,14 @@ function txRowHtml(row) {
   const e = row.expense;
   const category = data.categories.find((c) => c.id === e.category_id);
   const emoji = category ? emojiForCategory(category) : "💰";
+  // A converted expense shows what was actually paid under the note - the
+  // headline stays in the account's currency so the column still adds up.
+  const paid = e.original_currency
+    ? `<span class="tx-sub">${esc(t("paidIn", { amount: fmtIn(e.original_amount, e.original_currency) }))}</span>`
+    : "";
   return `<button class="tx-row ${row.radius} ${row.divider ? "has-divider" : ""}" data-action="open-tx" data-id="${e.id}">
       <span class="tile">${esc(emoji)}</span>
-      <span class="tx-name">${esc(e.note || (e.category_name || t("expense")))}</span>
+      <span class="tx-name">${esc(e.note || (e.category_name || t("expense")))}${paid}</span>
       <span class="tx-amount">${esc(fmt(e.amount))}</span>
     </button>`;
 }
@@ -898,6 +965,7 @@ function accountsView() {
     ["open-income", t("income"), periodOf(currentRange().start)],
     ["open-import", t("importSpreadsheet"), ".xlsx / .csv"],
     ["open-whatsapp", t("whatsappLogging"), me.phone_number || t("notLinked")],
+    ["open-rates", t("exchangeRates"), "EUR · USD · GBP · BTC · ETH"],
   ].map(([action, label, value]) => `
     <button class="card-row settings-row" data-action="${action}">
       <span class="settings-row-label">${esc(label)}</span>
@@ -940,6 +1008,88 @@ function accountsView() {
 
       <button class="danger-btn" data-action="logout">${esc(t("logout"))}</button>
       <button class="danger-btn danger-btn-quiet" data-action="open-delete-account">${esc(t("deleteAccount"))}</button>
+    </div>`;
+}
+
+// A page rather than a sheet: five rates, where each came from, and a small
+// converter so the numbers are usable rather than just readable. Reached from
+// the Accounts tab; it isn't a sixth tab because the tab bar is already full
+// and this isn't something you check several times a day.
+function ratesView() {
+  const rates = data.rates;
+
+  if (!rates) {
+    return `
+      <div class="view">
+        <button class="back-pill" data-action="go-accounts">← ${esc(t("back"))}</button>
+        <p class="empty-note">${esc(t("loading"))}</p>
+      </div>`;
+  }
+
+  if (!rates.rates.length) {
+    return `
+      <div class="view">
+        <button class="back-pill" data-action="go-accounts">← ${esc(t("back"))}</button>
+        <p class="empty-note">${esc(t("ratesUnavailable"))}</p>
+      </div>`;
+  }
+
+  const published = rates.date
+    ? parseDate(rates.date).toLocaleDateString(localeForLang(), { day: "numeric", month: "long", year: "numeric" })
+    : "";
+
+  const rows = rates.rates.map((r) => {
+    // Crypto is worth six figures in lei, so it gets no decimals; a fiat
+    // reference rate is meaningless without its four.
+    const value = r.kind === "crypto"
+      ? Number(r.ron).toLocaleString(localeForLang(), { maximumFractionDigits: 0 })
+      : Number(r.ron).toLocaleString(localeForLang(), { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+
+    return `
+      <div class="card-row rate-row">
+        <span class="tile">${esc(RATE_SYMBOLS[r.currency] || r.currency)}</span>
+        <span class="tx-name">${esc(r.currency)}
+          <span class="tx-sub">${esc(RATE_NAMES[r.currency] || "")} · ${esc(t(r.source === "bnr" ? "sourceBnr" : "sourceCrypto"))}</span>
+        </span>
+        <span class="tx-amount">${esc(value)} <span class="rate-unit">${esc(t("lei"))}</span></span>
+      </div>`;
+  }).join("");
+
+  const options = ["RON", ...rates.rates.map((r) => r.currency)];
+  const from = state.convFrom || "EUR";
+  const to = state.convTo || "RON";
+  const typed = parseFloat(state.convAmount);
+  const result = typed && ratesReady() ? convertWithRates(typed, from, to) : null;
+
+  const select = (id, selected) => `<select id="${id}">${options
+    .map((c) => `<option value="${esc(c)}"${c === selected ? " selected" : ""}>${esc(c)}</option>`)
+    .join("")}</select>`;
+
+  return `
+    <div class="view">
+      <button class="back-pill" data-action="go-accounts">← ${esc(t("back"))}</button>
+
+      <div class="rates-head">
+        <div class="caption">${esc(t("exchangeRates"))}</div>
+        <div class="rates-date">${esc(published ? t("bnrRatesFor", { date: published }) : "")}</div>
+        ${rates.stale ? `<div class="rates-stale">${esc(t("ratesStale", { days: rates.age_days || 0 }))}</div>` : ""}
+      </div>
+
+      <div class="card" style="margin-bottom:20px">${rows}</div>
+
+      <span class="caption section-caption">${esc(t("converter"))}</span>
+      <div class="card card-16" style="margin-bottom:18px">
+        <div class="conv-row">
+          <input id="conv-amount" type="text" inputmode="decimal" value="${esc(state.convAmount || "")}"
+            placeholder="0" />
+          ${select("conv-from", from)}
+          <span class="conv-arrow">→</span>
+          ${select("conv-to", to)}
+        </div>
+        <div class="conv-result">${esc(result == null ? "—" : fmtIn(result, to))}</div>
+      </div>
+
+      <p class="rates-note">${esc(t("ratesSourceNote"))}</p>
     </div>`;
 }
 
@@ -991,9 +1141,28 @@ function addSheet() {
   const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "⌫"]
     .map((k) => `<button class="key" data-action="key" data-value="${esc(k)}">${esc(k)}</button>`).join("");
 
+  // The account's own currency always sits first and is always present, even
+  // if it isn't one of the four - picking it is how you get back to no
+  // conversion at all.
+  const codes = [currentCurrency, ...ENTRY_CURRENCIES.filter((c) => c !== currentCurrency)];
+  const active = entryCurrency();
+  const currencyChips = codes.map((code) => `
+    <button class="cur-chip ${code === active ? "is-selected" : ""}" data-action="set-add-currency" data-value="${esc(code)}">
+      ${esc(code)}
+    </button>`).join("");
+
+  // Converted preview, so you commit to a number rather than discovering it
+  // after saving. Rates come from the same snapshot the backend converts with.
+  const typed = parseFloat(state.amount);
+  const converted = active !== currentCurrency && typed && ratesReady()
+    ? `<div class="keypad-converted">≈ ${esc(fmt(convertWithRates(typed, active, currentCurrency)))}</div>`
+    : "";
+
   return sheetShell(`
     <div class="sheet-caption">${esc(t("enterAmount"))}</div>
-    <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(withCurrency(state.amount || "0"))}</div>
+    <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(withCurrencyIn(state.amount || "0", active))}</div>
+    ${converted}
+    <div class="cur-chip-row">${currencyChips}</div>
     <div class="cat-pill-row">${pills || `<span class="note">${esc(t("noCategoriesYet"))}</span>`}</div>
     <div class="keypad">${keys}</div>
     <div class="sheet-btn-row" style="margin-top:0">
@@ -1011,6 +1180,17 @@ function txSheet() {
     [t("date"), parseDate(expense.date).toLocaleDateString(localeForLang(), { weekday: "short", day: "numeric", month: "short", year: "numeric" })],
     [t("account"), expense.account_name || t("notSet")],
     [t("category"), expense.category_name || t("uncategorized")],
+    // The rate is shown as it was on the day, not as it is now - it explains
+    // the number stored on this row, which today's rate no longer would.
+    ...(expense.original_currency ? [
+      [t("paidAmount"), fmtIn(expense.original_amount, expense.original_currency)],
+      // A rate keeps four decimals - fmt()'s two would round 5.2524 to 5.25
+      // and stop explaining the amount beside it.
+      [t("rateUsed"), `1 ${expense.original_currency} = ${withCurrencyIn(
+        Number(expense.fx_rate).toLocaleString(localeForLang(), { minimumFractionDigits: 4, maximumFractionDigits: 4 }),
+        currentCurrency,
+      )}`],
+    ] : []),
   ].map(([label, value]) => `<div class="meta-row"><span>${esc(label)}</span><span>${esc(value)}</span></div>`).join("");
 
   return sheetShell(`
@@ -1325,6 +1505,7 @@ const SHEETS = {
 
 const VIEWS = {
   activity: activityView,
+  rates: ratesView,
   summary: summaryView,
   detail: detailView,
   budget: budgetView,
@@ -1404,6 +1585,19 @@ async function loadRange() {
     }
     const pages = await Promise.all(periods.map((p) => apiFetch(`/api/income?period=${p}`)));
     data.income = pages.flat();
+  }
+}
+
+// Rates are the same for everyone and change once a day, so they load when
+// something actually needs them - opening the page, or opening the add sheet
+// where the converted preview is drawn - rather than on every refresh.
+async function loadRates() {
+  try {
+    data.rates = await apiFetch("/api/rates");
+  } catch (err) {
+    // A rates outage must not take down the add sheet: the preview simply
+    // doesn't draw, and the backend still converts on save.
+    data.rates = { rates: [], error: err.message };
   }
 }
 
@@ -1575,10 +1769,14 @@ const ACTIONS = {
         category_id: state.addCatId,
         account_id: data.accounts.length ? data.accounts[0].id : null,
         date: isoDate(new Date()),
+        // Omitted when it matches the account's currency, so the common case
+        // sends exactly what it always did.
+        currency: state.addCurrency || undefined,
       }),
     });
     state.sheet = null;
     state.amount = "";
+    state.addCurrency = null;
     return refresh({ identity: true, months: true });
   },
   "open-tx": (el) => { state.sheet = "tx"; state.txId = Number(el.dataset.id); },
@@ -1630,6 +1828,23 @@ const ACTIONS = {
   "open-import": () => { state.sheet = "import"; state.error = ""; },
   "run-import": () => runImport(),
   "open-whatsapp": () => { state.sheet = "whatsapp"; },
+
+  "open-rates": async () => {
+    state.view = "rates";
+    if (!data.rates) {
+      render(); // paint the page's loading state before the request goes out
+      await loadRates();
+    }
+  },
+  "set-add-currency": async (el) => {
+    const code = el.dataset.value;
+    state.addCurrency = code === currentCurrency ? null : code;
+    // The preview needs rates the first time a foreign currency is picked.
+    if (state.addCurrency && !data.rates) {
+      render();
+      await loadRates();
+    }
+  },
 
   "open-categories": () => { state.sheet = "categories"; state.error = ""; },
   "new-category": () => { state.sheet = "categoryEdit"; state.editingCategoryId = null; state.error = ""; },
@@ -1808,8 +2023,28 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("input", (event) => {
-  if (event.target.id !== "search-input") return;
-  state.q = event.target.value;
+  if (event.target.id === "search-input") {
+    state.q = event.target.value;
+    render();
+    return;
+  }
+
+  // The converter updates its own result node instead of re-rendering: a full
+  // render would rebuild the input and drop the caret mid-number.
+  if (event.target.id === "conv-amount") {
+    state.convAmount = event.target.value;
+    const output = document.querySelector(".conv-result");
+    if (!output) return;
+    const typed = parseFloat(state.convAmount);
+    const result = typed && ratesReady() ? convertWithRates(typed, state.convFrom, state.convTo) : null;
+    output.textContent = result == null ? "—" : fmtIn(result, state.convTo);
+  }
+});
+
+document.addEventListener("change", (event) => {
+  if (event.target.id !== "conv-from" && event.target.id !== "conv-to") return;
+  state.convFrom = document.getElementById("conv-from").value;
+  state.convTo = document.getElementById("conv-to").value;
   render();
 });
 

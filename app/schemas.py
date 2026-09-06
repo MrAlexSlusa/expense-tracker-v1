@@ -65,6 +65,11 @@ class ChatMessageResponse(BaseModel):
     spent: float | None = None  # this category's total for the current month, if over_budget
     target: float | None = None
     parsed: bool = True  # false if the message didn't parse - frontend shows its own localized error
+    # Set only when the message named a currency other than the user's own, so
+    # the reply can confirm what was converted rather than echoing a number the
+    # sender never typed.
+    original_amount: float | None = None
+    original_currency: str | None = None
 
 
 class CategoryOut(BaseModel):
@@ -81,6 +86,11 @@ class ExpenseCreateRequest(BaseModel):
     account_id: Optional[int] = None
     date: Optional[str] = None  # "YYYY-MM-DD"; defaults to today
     note: Optional[str] = None
+    # The currency `amount` is written in. None (or the account's own
+    # currency) means no conversion; anything else is converted at the BNR
+    # reference rate and stored in the account's currency, with the original
+    # kept alongside it.
+    currency: Optional[str] = None
 
 
 class ExpenseUpdateRequest(BaseModel):
@@ -91,11 +101,15 @@ class ExpenseUpdateRequest(BaseModel):
     clear_account: bool = False
     date: Optional[str] = None  # "YYYY-MM-DD"
     note: Optional[str] = None
+    currency: Optional[str] = None  # re-converts `amount` from this currency; see ExpenseCreateRequest
 
 
 class ExpenseOut(BaseModel):
     id: int
-    amount: float
+    amount: float  # always in the user's own currency
+    original_amount: Optional[float] = None  # what was actually spent, if it was another currency
+    original_currency: Optional[str] = None
+    fx_rate: Optional[float] = None
     category_id: Optional[int] = None
     category_name: Optional[str] = None
     category_icon: Optional[str] = None

@@ -1737,3 +1737,137 @@ textarea {
   border-color: var(--danger-border);
   color: var(--danger);
 }
+
+/* --- Currency on the keypad -------------------------------------------- */
+/* The same pill shape as the category row above it, one step quieter: the
+   currency is a qualifier on the amount, not a second thing to choose. */
+
+.cur-chip-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0 0;
+}
+
+.cur-chip {
+  height: 32px;
+  flex: none;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--white-10);
+  background: var(--white-05);
+  color: var(--text-muted);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.cur-chip.is-selected {
+  background: var(--white-14);
+  border-color: var(--white-14);
+  color: var(--text);
+}
+
+/* Sits directly under the typed amount, so the converted figure reads as the
+   same number restated rather than a second amount being entered. */
+.keypad-converted {
+  text-align: center;
+  margin-top: -6px;
+  color: var(--text-muted);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The converted-from line sits under the note rather than running on after it.
+   Scoped to transaction rows: .tx-sub is shared with the account and detail
+   lists, whose current one-line look isn't mine to change here. */
+.tx-row .tx-sub {
+  display: block;
+}
+
+/* --- Exchange rates page ----------------------------------------------- */
+
+.rates-head {
+  margin: 4px 0 14px;
+}
+
+.rates-date {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 13.5px;
+}
+
+.rates-stale {
+  margin-top: 6px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.rate-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+}
+
+/* Rates are read as a column of numbers, so they line up on the digit rather
+   than on the glyph widths of whatever font is in use. */
+.rate-row .tx-amount {
+  font-variant-numeric: tabular-nums;
+}
+
+.rate-unit {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.conv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 14px 6px;
+}
+
+.conv-row input {
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--white-10);
+  background: var(--white-05);
+  color: var(--text);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.conv-row select {
+  height: 42px;
+  padding: 0 8px;
+  border-radius: 12px;
+  border: 1px solid var(--white-10);
+  background: var(--white-05);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.conv-arrow {
+  color: var(--text-muted);
+}
+
+.conv-result {
+  padding: 4px 14px 16px;
+  text-align: right;
+  font-size: 21px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rates-note {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0 2px 20px;
+}

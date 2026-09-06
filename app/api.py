@@ -18,6 +18,7 @@ from app.email_sender import send_otp_email
 from app.quiz import public_questions, compute_categories, fallback_category
 from app import oauth
 from app.importer import parse_workbook, guess_period_from_filename
+from app import bnr
 from app.schemas import (
     SignupRequest,
     LoginRequest,
@@ -603,6 +604,36 @@ def update_currency(
     return {"currency": user.currency}
 
 
+# --- Exchange rates -------------------------------------------------------
+# Read-only and identical for everyone, so no auth: these are published
+# reference rates, not anything belonging to an account.
+
+
+@router.get("/api/rates")
+def get_rates():
+    """
+    Today's rates for the currencies the app shows: EUR/USD/GBP straight from
+    BNR, BTC/ETH from a crypto price source with BNR's USD rate doing the RON
+    leg. Each row says which, since a central bank does not publish a bitcoin
+    price and the page shouldn't imply otherwise.
+    """
+    try:
+        return bnr.page_rates()
+    except bnr.RatesUnavailable:
+        raise HTTPException(status_code=503, detail="Exchange rates are unavailable right now - try again shortly")
+
+
+@router.get("/api/rates/convert")
+def convert_amount(amount: float, source: str, target: str):
+    try:
+        converted, rate = bnr.convert(amount, source, target)
+    except bnr.RatesUnavailable:
+        raise HTTPException(status_code=503, detail="Exchange rates are unavailable right now - try again shortly")
+    except KeyError as unknown:
+        raise HTTPException(status_code=400, detail=f"No BNR exchange rate for {unknown.args[0]}")
+    return {"amount": converted, "rate": rate, "source": source.upper(), "target": target.upper()}
+
+
 # --- In-app chat: same parser the WhatsApp webhook uses --------------------
 
 
@@ -620,9 +651,16 @@ def send_chat_message(
     matched_name = best_category_match(parsed.category, [c.name for c in categories])
     matched = next((c for c in categories if c.name == matched_name), None)
 
+    # "25 eur benzina" is logged in euros and stored in the user's currency,
+    # the same way the app's own add sheet does it.
+    amount, original_amount, original_currency, fx_rate = _convert_for_user(parsed.amount, parsed.currency, user)
+
     expense = Expense(
         user_id=user.id,
-        amount=parsed.amount,
+        amount=amount,
+        original_amount=original_amount,
+        original_currency=original_currency,
+        fx_rate=fx_rate,
         category=parsed.category,
         category_id=matched.id if matched is not None else None,
         raw_message=payload.text,
@@ -631,7 +669,12 @@ def send_chat_message(
     db.commit()
 
     label = matched.name if matched is not None else (parsed.category or "uncategorized")
-    response = ChatMessageResponse(amount=parsed.amount, category=label)
+    response = ChatMessageResponse(
+        amount=amount,
+        category=label,
+        original_amount=original_amount,
+        original_currency=original_currency,
+    )
 
     if matched is not None and matched.target is not None:
         start, end = _month_bounds(None, user)
@@ -872,10 +915,41 @@ def _parse_date_or_400(date_str: Optional[str]) -> datetime:
         raise HTTPException(status_code=400, detail="date must be in YYYY-MM-DD format")
 
 
+def _convert_for_user(amount: float, currency: Optional[str], user: User) -> tuple[float, Optional[float], Optional[str], Optional[float]]:
+    """
+    Resolves an amount that may have been entered in another currency.
+
+    Returns (amount_in_user_currency, original_amount, original_currency,
+    fx_rate). The last three are None when no conversion happened, which keeps
+    a same-currency expense indistinguishable from one logged before this
+    existed.
+
+    Conversion failures are a 503, not a silent fallback to 1:1 - filing €25
+    as 25 lei would corrupt every total that touches it, and the user can
+    always re-enter the amount in their own currency instead.
+    """
+    code = (currency or "").strip().upper()
+    own = (user.currency or "RON").strip().upper()
+    if not code or code == own:
+        return amount, None, None, None
+
+    try:
+        converted, rate = bnr.convert(amount, code, own)
+    except bnr.RatesUnavailable:
+        raise HTTPException(status_code=503, detail="Exchange rates are unavailable right now - try again shortly")
+    except KeyError as unknown:
+        raise HTTPException(status_code=400, detail=f"No BNR exchange rate for {unknown.args[0]}")
+
+    return converted, amount, code, rate
+
+
 def _expense_to_dict(e: Expense, zone=UTC) -> dict:
     return {
         "id": e.id,
         "amount": e.amount,
+        "original_amount": e.original_amount,
+        "original_currency": e.original_currency,
+        "fx_rate": e.fx_rate,
         "category_id": e.category_id,
         "category_name": e.matched_category.name if e.matched_category else None,
         "category_icon": e.matched_category.icon if e.matched_category else None,
@@ -925,9 +999,14 @@ def create_expense(
 
     account = _own_account_or_404(db, user, payload.account_id) if payload.account_id is not None else None
 
+    amount, original_amount, original_currency, fx_rate = _convert_for_user(payload.amount, payload.currency, user)
+
     expense = Expense(
         user_id=user.id,
-        amount=payload.amount,
+        amount=amount,
+        original_amount=original_amount,
+        original_currency=original_currency,
+        fx_rate=fx_rate,
         category=category.name if category else None,
         category_id=category.id if category else None,
         account_id=account.id if account else None,
@@ -952,7 +1031,14 @@ def update_expense(
         raise HTTPException(status_code=404, detail="Expense not found")
 
     if payload.amount is not None:
-        expense.amount = payload.amount
+        # Editing the amount re-runs the conversion at today's rate rather than
+        # reusing the stored one: the stored rate explains the original entry,
+        # and a correction is a new decision about a new number.
+        amount, original_amount, original_currency, fx_rate = _convert_for_user(payload.amount, payload.currency, user)
+        expense.amount = amount
+        expense.original_amount = original_amount
+        expense.original_currency = original_currency
+        expense.fx_rate = fx_rate
     if payload.clear_category:
         expense.category_id = None
     elif payload.category_id is not None:

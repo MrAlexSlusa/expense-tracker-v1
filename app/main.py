@@ -16,6 +16,11 @@ Base.metadata.create_all(bind=engine)
 ensure_columns(table="expenses", columns={"account_id": "INTEGER"})
 ensure_columns(table="users", columns={"oauth_provider": "VARCHAR", "oauth_sub": "VARCHAR"})
 ensure_columns(table="users", columns={"timezone": "VARCHAR"})
+ensure_columns(table="expenses", columns={
+    "original_amount": "FLOAT",
+    "original_currency": "VARCHAR",
+    "fx_rate": "FLOAT",
+})
 
 app = FastAPI(title="WhatsApp Expense Tracker")
 
