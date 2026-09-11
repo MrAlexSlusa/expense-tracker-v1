@@ -1,0 +1,41 @@
+name: Keep the backend awake
+
+# Render's free tier puts a web service to sleep after ~15 minutes with no
+# requests, and the next visitor then waits ~50s for a cold start. Pinging the
+# health endpoint often enough keeps it warm around the clock.
+#
+# GitHub's scheduler is best-effort and routinely runs a few minutes late, so
+# the interval is 10 minutes rather than 14 — that leaves slack before the
+# 15-minute idle timeout.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+# A backed-up queue of pings is worth nothing; only the newest matters.
+concurrency:
+  group: keep-awake
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the health endpoint
+        env:
+          # Same host as DEPLOYED_API_URL in web/config.js — keep them in sync.
+          API_URL: https://expense-tracker-7mnp.onrender.com/
+        run: |
+          # --max-time 90 rather than the default: if the service *has* gone to
+          # sleep, this request is the one paying for the cold start.
+          code=$(curl --silent --show-error --location \
+                      --max-time 90 --retry 2 --retry-delay 15 \
+                      --write-out '%{http_code}' --output body.txt \
+                      "$API_URL") || true
+          echo "HTTP $code"
+          cat body.txt || true
+          echo
+          if [ "$code" != "200" ]; then
+            echo "::error::Backend did not answer with 200 (got '${code:-no response}')."
+            exit 1
+          fi
