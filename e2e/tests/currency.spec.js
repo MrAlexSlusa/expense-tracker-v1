@@ -51,8 +51,10 @@ test("picking a currency previews the converted amount before saving", async ({ 
 
   await page.locator('[data-action="open-add"]').click();
   await typeAmount(page, "100");
-  // In the account's own currency there is nothing to preview.
-  await expect(page.locator(".keypad-converted")).toHaveCount(0);
+  // In the account's own currency there is nothing to preview. The line still
+  // holds its place - it is reserved so the keypad doesn't jump when a
+  // conversion appears - so what's asserted is that it says nothing.
+  await expect(page.locator(".keypad-converted")).toHaveText("");
 
   await page.locator('.cur-chip[data-value="EUR"]').click();
   await expect(page.locator(".keypad-amount")).toHaveText("€100");
@@ -73,7 +75,11 @@ test("a euro expense is stored in lei and counted in the month's total", async (
   await typeAmount(page, "100");
   await page.locator('.cur-chip[data-value="EUR"]').click();
 
-  const previewed = Number((await page.locator(".keypad-converted").innerText()).replace(/[^\d.]/g, ""));
+  // The line is always in the DOM (it holds its place so the keypad can't
+  // jump), so reading it has to wait for the rates rather than for the node.
+  const preview = page.locator(".keypad-converted");
+  await expect(preview).toContainText("lei");
+  const previewed = Number((await preview.innerText()).replace(/[^\d.]/g, ""));
   await page.locator('[data-action="save-expense"]').click();
   await expect(page.locator(".sheet")).toHaveCount(0);
 
