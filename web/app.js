@@ -1130,6 +1130,28 @@ function periodSheet() {
     <button class="btn-primary" style="width:100%" data-action="close-sheet">${esc(t("done"))}</button>`);
 }
 
+// The converted figure under the typed amount - "" when the entry currency is
+// the account's own, or the rates haven't arrived yet.
+function convertedPreview() {
+  const typed = parseFloat(state.amount);
+  const active = entryCurrency();
+  if (active === currentCurrency || !typed || !ratesReady()) return "";
+  return `≈ ${fmt(convertWithRates(typed, active, currentCurrency))}`;
+}
+
+// Typing a digit changes exactly two pieces of text. Rebuilding the whole sheet
+// for that restarts its slide-up animation on every keystroke, which is the
+// twitch; patch the two nodes instead and leave the sheet alone.
+function patchAddSheet() {
+  const display = document.querySelector(".keypad-amount");
+  if (!display) return false;
+  display.textContent = withCurrencyIn(state.amount || "0", entryCurrency());
+  display.classList.toggle("is-empty", !state.amount);
+  const conv = document.querySelector(".keypad-converted");
+  if (conv) conv.textContent = convertedPreview();
+  return true;
+}
+
 function addSheet() {
   const cats = decoratedCategories();
   const pills = cats.map((c) => {
@@ -1153,10 +1175,10 @@ function addSheet() {
 
   // Converted preview, so you commit to a number rather than discovering it
   // after saving. Rates come from the same snapshot the backend converts with.
-  const typed = parseFloat(state.amount);
-  const converted = active !== currentCurrency && typed && ratesReady()
-    ? `<div class="keypad-converted">≈ ${esc(fmt(convertWithRates(typed, active, currentCurrency)))}</div>`
-    : "";
+  // The node is always in the tree, empty when there is nothing to convert:
+  // appearing and disappearing between keystrokes would shove the keypad up
+  // and down under the thumb.
+  const converted = `<div class="keypad-converted">${esc(convertedPreview())}</div>`;
 
   return sheetShell(`
     <div class="sheet-caption">${esc(t("enterAmount"))}</div>
@@ -1527,14 +1549,25 @@ function renderTabs() {
   }).join("");
 }
 
+let renderedSheet = null;
+
 function render() {
   const root = document.getElementById("view-root");
   root.innerHTML = (VIEWS[state.view] || activityView)();
   renderTabs();
 
-  document.getElementById("sheet-root").innerHTML = state.sheet && SHEETS[state.sheet]
-    ? SHEETS[state.sheet]()
-    : "";
+  // A re-render while the same sheet stays open (picking a category, switching
+  // currency) must not replay its slide-up: that reads as a jolt, not an entrance.
+  const sheetRoot = document.getElementById("sheet-root");
+  const staying = state.sheet && state.sheet === renderedSheet;
+  const scrollTop = staying ? (sheetRoot.querySelector(".sheet")?.scrollTop || 0) : 0;
+  sheetRoot.innerHTML = state.sheet && SHEETS[state.sheet] ? SHEETS[state.sheet]() : "";
+  renderedSheet = state.sheet;
+  if (staying) {
+    sheetRoot.querySelectorAll(".sheet, .sheet-scrim").forEach((el) => el.classList.add("no-anim"));
+    const sheet = sheetRoot.querySelector(".sheet");
+    if (sheet) sheet.scrollTop = scrollTop;
+  }
 
   const search = document.getElementById("search-input");
   if (search) {
@@ -1754,7 +1787,10 @@ const ACTIONS = {
       state.addCatId = first ? first.id : null;
     }
   },
-  key: (el) => pressKey(el.dataset.value),
+  key: (el) => {
+    pressKey(el.dataset.value);
+    return patchAddSheet() ? "no-render" : undefined;
+  },
   "set-add-category": (el) => { state.addCatId = Number(el.dataset.id); },
   "save-expense": async () => {
     const amount = parseFloat(state.amount);
