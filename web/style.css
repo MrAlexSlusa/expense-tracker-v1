@@ -840,9 +840,9 @@ textarea {
   flex: none;
 }
 
-/* ------------------------------------------------------------ accounts */
+/* ------------------------------------------------------------- profile */
 
-.accounts-view {
+.profile-view {
   padding: 4px var(--gutter) 0;
 }
 
@@ -954,10 +954,6 @@ textarea {
 .chevron {
   color: var(--text-faint);
   font-size: 16px;
-}
-
-.account-row {
-  padding: 14px 16px;
 }
 
 .danger-btn {
@@ -1789,7 +1785,7 @@ textarea {
 }
 
 /* The converted-from line sits under the note rather than running on after it.
-   Scoped to transaction rows: .tx-sub is shared with the account and detail
+   Scoped to transaction rows: .tx-sub is shared with the detail
    lists, whose current one-line look isn't mine to change here. */
 .tx-row .tx-sub {
   display: block;

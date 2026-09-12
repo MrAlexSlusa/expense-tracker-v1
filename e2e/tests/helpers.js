@@ -40,6 +40,6 @@ function storage(page, area, key) {
   return page.evaluate(([a, k]) => window[a].getItem(k), [area, key]);
 }
 
-const openAccountsTab = (page) => page.locator('[data-action="go-accounts"]').first().click();
+const openProfileTab = (page) => page.locator('[data-action="go-profile"]').first().click();
 
-module.exports = { freshEmail, signUp, storage, openAccountsTab, PASSWORD };
+module.exports = { freshEmail, signUp, storage, openProfileTab, PASSWORD };

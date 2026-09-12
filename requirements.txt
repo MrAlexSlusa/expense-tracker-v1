@@ -4,8 +4,6 @@ sqlalchemy
 python-multipart
 pytest
 httpx
-gspread
-google-auth
 bcrypt
 python-jose[cryptography]
 email-validator
