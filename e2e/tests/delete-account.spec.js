@@ -8,7 +8,7 @@ const { signUp, storage, PASSWORD } = require("./helpers");
  * it only appears when the real request meets the real error handler.
  */
 async function openDeleteSheet(page) {
-  await page.locator('[data-action="go-accounts"]').first().click();
+  await page.locator('[data-action="go-profile"]').first().click();
   await page.locator('[data-action="open-delete-account"]').click();
   await expect(page.locator(".sheet-title")).toHaveText("Delete account");
 }
@@ -71,7 +71,7 @@ test("deleting one account leaves another signed-in account untouched", async ({
   const doomedCtx = await browser.newContext();
   const doomed = await doomedCtx.newPage();
   await signUp(doomed);
-  await doomed.locator('[data-action="go-accounts"]').first().click();
+  await doomed.locator('[data-action="go-profile"]').first().click();
   await doomed.locator('[data-action="open-delete-account"]').click();
   await doomed.locator("#delete-password").fill(PASSWORD);
   await doomed.locator('[data-action="confirm-delete-account"]').click();

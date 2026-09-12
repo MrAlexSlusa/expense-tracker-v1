@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import User, Expense, BudgetCategory, IncomeSource, Account, OtpCode
-from app.utils import normalize_phone, best_category_match
+from app.models import User, Expense, BudgetCategory, IncomeSource, OtpCode
+from app.utils import best_category_match
 from app.auth import hash_password, verify_password, create_access_token, get_current_user, issue_otp, consume_otp
 from app.parser import parse_expense_message
 from app.email_sender import send_otp_email
@@ -42,8 +42,6 @@ from app.schemas import (
     GoalUpdateRequest,
     IncomeCreateRequest,
     IncomeUpdateRequest,
-    AccountCreateRequest,
-    AccountUpdateRequest,
 )
 
 router = APIRouter()
@@ -148,56 +146,7 @@ def _date_range(
     return _month_bounds(period, user)
 
 
-@router.get("/api/users/{phone_number}/expenses")
-def list_expenses(phone_number: str, db: Session = Depends(get_db)):
-    phone_number = normalize_phone(phone_number)
-    user = db.query(User).filter(User.phone_number == phone_number).first()
-    if user is None:
-        raise HTTPException(status_code=404, detail="No expenses logged for this number yet")
-
-    expenses = (
-        db.query(Expense)
-        .filter(Expense.user_id == user.id)
-        .order_by(Expense.created_at.desc())
-        .all()
-    )
-    return [
-        {
-            "amount": e.amount,
-            "category": e.category or "uncategorized",
-            "raw_message": e.raw_message,
-            "created_at": e.created_at.isoformat(),
-        }
-        for e in expenses
-    ]
-
-
-@router.get("/api/users/{phone_number}/summary")
-def spending_summary(phone_number: str, db: Session = Depends(get_db)):
-    phone_number = normalize_phone(phone_number)
-    user = db.query(User).filter(User.phone_number == phone_number).first()
-    if user is None:
-        raise HTTPException(status_code=404, detail="No expenses logged for this number yet")
-
-    rows = (
-        db.query(Expense.category, func.sum(Expense.amount), func.count(Expense.id))
-        .filter(Expense.user_id == user.id)
-        .group_by(Expense.category)
-        .all()
-    )
-    total = sum(r[1] for r in rows)
-    return {
-        "total": round(total, 2),
-        "by_category": [
-            {"category": cat or "uncategorized", "total": round(amt, 2), "count": cnt}
-            for cat, amt, cnt in rows
-        ],
-    }
-
-
 # --- App account endpoints (email/password + JWT) -------------------------
-# Separate identity path from the WhatsApp phone-number flow above; both
-# land on the same User/Expense tables.
 
 
 @router.post("/api/auth/signup", response_model=TokenResponse)
@@ -400,12 +349,11 @@ def delete_account(
 
     user_id = user.id
 
-    # Expenses first: they point at budget_categories and accounts, so removing
-    # those before the rows referencing them would trip the foreign keys.
+    # Expenses first: they point at budget_categories, so removing those
+    # before the rows referencing them would trip the foreign keys.
     deleted = {
         "expenses": db.query(Expense).filter(Expense.user_id == user_id).delete(synchronize_session=False),
         "categories": db.query(BudgetCategory).filter(BudgetCategory.user_id == user_id).delete(synchronize_session=False),
-        "accounts": db.query(Account).filter(Account.user_id == user_id).delete(synchronize_session=False),
         "income": db.query(IncomeSource).filter(IncomeSource.user_id == user_id).delete(synchronize_session=False),
         "otp_codes": db.query(OtpCode).filter(OtpCode.user_id == user_id).delete(synchronize_session=False),
     }
@@ -517,7 +465,6 @@ def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_
         "current_streak_days": streak,
         "member_since": user.created_at.isoformat() if user.created_at else None,
         "months_tracked": len(by_month),
-        "linked_accounts": db.query(Account).filter(Account.user_id == user.id).count(),
     }
 
 
@@ -634,7 +581,7 @@ def convert_amount(amount: float, source: str, target: str):
     return {"amount": converted, "rate": rate, "source": source.upper(), "target": target.upper()}
 
 
-# --- In-app chat: same parser the WhatsApp webhook uses --------------------
+# --- In-app chat: logging an expense by typing it out ----------------------
 
 
 @router.post("/api/chat/message", response_model=ChatMessageResponse)
@@ -953,8 +900,6 @@ def _expense_to_dict(e: Expense, zone=UTC) -> dict:
         "category_id": e.category_id,
         "category_name": e.matched_category.name if e.matched_category else None,
         "category_icon": e.matched_category.icon if e.matched_category else None,
-        "account_id": e.account_id,
-        "account_name": _account_label(e.account) if e.account else None,
         "note": e.raw_message,
         "date": local_date(e.created_at, zone).strftime("%Y-%m-%d"),
     }
@@ -997,8 +942,6 @@ def create_expense(
         if category is None:
             raise HTTPException(status_code=404, detail="Category not found")
 
-    account = _own_account_or_404(db, user, payload.account_id) if payload.account_id is not None else None
-
     amount, original_amount, original_currency, fx_rate = _convert_for_user(payload.amount, payload.currency, user)
 
     expense = Expense(
@@ -1009,7 +952,6 @@ def create_expense(
         fx_rate=fx_rate,
         category=category.name if category else None,
         category_id=category.id if category else None,
-        account_id=account.id if account else None,
         raw_message=payload.note or (category.name if category else "Manual entry"),
         created_at=_parse_date_or_400(payload.date),
     )
@@ -1051,10 +993,6 @@ def update_expense(
             raise HTTPException(status_code=404, detail="Category not found")
         expense.category_id = category.id
         expense.category = category.name
-    if payload.clear_account:
-        expense.account_id = None
-    elif payload.account_id is not None:
-        expense.account_id = _own_account_or_404(db, user, payload.account_id).id
     if payload.date is not None:
         expense.created_at = _parse_date_or_400(payload.date)
     if payload.note is not None:
@@ -1075,118 +1013,6 @@ def delete_expense(
     if expense is None:
         raise HTTPException(status_code=404, detail="Expense not found")
     db.delete(expense)
-    db.commit()
-    return {"deleted": True}
-
-
-# --- Accounts: where money was spent from ------------------------------
-# Descriptive only - a balance the user keeps up to date, not a ledger
-# derived from expenses, since most of what moves through a real account
-# never passes through this app.
-
-
-def _account_label(account: Account) -> str:
-    """"Emirates NBD ·1042" - the one-line form the transaction sheet shows."""
-    return f"{account.name} ·{account.last4}" if account.last4 else account.name
-
-
-def _own_account_or_404(db: Session, user: User, account_id: int) -> Account:
-    account = (
-        db.query(Account).filter(Account.id == account_id, Account.user_id == user.id).first()
-    )
-    if account is None:
-        raise HTTPException(status_code=404, detail="Account not found")
-    return account
-
-
-def _account_to_dict(a: Account) -> dict:
-    return {
-        "id": a.id,
-        "name": a.name,
-        "kind": a.kind,
-        "last4": a.last4,
-        "balance": round(a.balance, 2),
-        "icon": a.icon,
-        "label": _account_label(a),
-    }
-
-
-@router.get("/api/accounts")
-def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    accounts = (
-        db.query(Account).filter(Account.user_id == user.id).order_by(Account.id).all()
-    )
-    return [_account_to_dict(a) for a in accounts]
-
-
-@router.post("/api/accounts")
-def create_account(
-    payload: AccountCreateRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    name = payload.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Account name can't be empty")
-
-    account = Account(
-        user_id=user.id,
-        name=name,
-        kind=(payload.kind or None),
-        last4=(payload.last4 or None),
-        balance=payload.balance,
-    )
-    if payload.icon:
-        account.icon = payload.icon
-    db.add(account)
-    db.commit()
-    db.refresh(account)
-    return _account_to_dict(account)
-
-
-@router.put("/api/accounts/{account_id}")
-def update_account(
-    account_id: int,
-    payload: AccountUpdateRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    account = _own_account_or_404(db, user, account_id)
-
-    if payload.name is not None:
-        name = payload.name.strip()
-        if not name:
-            raise HTTPException(status_code=400, detail="Account name can't be empty")
-        account.name = name
-    if payload.clear_kind:
-        account.kind = None
-    elif payload.kind is not None:
-        account.kind = payload.kind
-    if payload.clear_last4:
-        account.last4 = None
-    elif payload.last4 is not None:
-        account.last4 = payload.last4
-    if payload.balance is not None:
-        account.balance = payload.balance
-    if payload.icon:
-        account.icon = payload.icon
-
-    db.commit()
-    db.refresh(account)
-    return _account_to_dict(account)
-
-
-@router.delete("/api/accounts/{account_id}")
-def delete_account(
-    account_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    account = _own_account_or_404(db, user, account_id)
-    # Expenses outlive the account they were paid from - they just stop
-    # naming one, the same way a deleted category leaves its expenses intact.
-    db.query(Expense).filter(Expense.account_id == account.id).update({Expense.account_id: None})
-    db.delete(account)
     db.commit()
     return {"deleted": True}
 

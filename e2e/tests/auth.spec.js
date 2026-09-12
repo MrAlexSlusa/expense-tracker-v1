@@ -35,7 +35,7 @@ test.describe("save my login info", () => {
     expect(await storage(page, "sessionStorage", "expense_tracker_token")).toBeNull();
 
     // Log out, and the login form should remember who was here.
-    await page.locator('[data-action="go-accounts"]').first().click();
+    await page.locator('[data-action="go-profile"]').first().click();
     await page.locator('[data-action="logout"]').click();
     await expect(page.locator("#auth-screen")).toBeVisible();
     await expect(page.locator("#email")).toHaveValue(email);

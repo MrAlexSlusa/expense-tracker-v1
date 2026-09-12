@@ -24,7 +24,7 @@ const CURRENCIES = [
 // written after the amount in their own convention - "9 lei", never "lei9".
 const SUFFIX_CURRENCIES = new Set(["RON"]);
 
-// The currencies you can log an expense in, whatever your account default is.
+// The currencies you can log an expense in, whatever your own default is.
 // Kept to the ones BNR quotes daily and people here actually hold - the point
 // is a fast tap while adding, not a second full currency list.
 const ENTRY_CURRENCIES = ["RON", "EUR", "USD", "GBP"];
@@ -82,7 +82,6 @@ const EMOJI_CHOICES = [
   "✈️", "💹", "🎁", "🐶", "📚", "👶",
   "💻", "🏦", "💳", "💵", "💰",
 ];
-const ACCOUNT_EMOJI_CHOICES = ["🏦", "💳", "💵", "💰", "📱", "🪙"];
 
 const GOAL_COLORS = { Wants: "#f5c542", Needs: "#4353ff", Savings: "#32d583" };
 const OVER_BUDGET_COLOR = "#f2295b";
@@ -98,7 +97,7 @@ const TAB_DEFS = [
   ["summary", "tabSummary", "M12 3a9 9 0 109 9h-9V3z"],
   ["budget", "tabBudget", "M3 8a2 2 0 012-2h14a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V8zm13 4h3M3 10h18"],
   ["analytics", "tabAnalytics", "M5 20V10M12 20V4M19 20v-7"],
-  ["accounts", "tabAccounts", "M3 10l9-6 9 6M5 10v9h14v-9M9 19v-5h6v5"],
+  ["profile", "tabProfile", "M12 12a4 4 0 100-8 4 4 0 000 8zM4 20a8 8 0 0116 0"],
 ];
 
 // --- state ---------------------------------------------------------------
@@ -118,13 +117,12 @@ const state = {
   q: "",
   amount: "", // keypad buffer
   addCatId: null,
-  addCurrency: null, // null = the account's own currency; otherwise an ENTRY_CURRENCIES code
+  addCurrency: null, // null = your own currency; otherwise an ENTRY_CURRENCIES code
   convAmount: "", // the rates page's converter
   convFrom: "EUR",
   convTo: "RON",
   txId: null,
   editingCategoryId: null,
-  editingAccountId: null,
   busy: false,
   error: "",
 };
@@ -136,7 +134,6 @@ const data = {
   expenses: [],
   income: [],
   goals: [],
-  accounts: [],
   prevTotal: null, // same-length previous range, for the "x% from ..." delta
   analyticsBuckets: null, // lazily loaded, only the Analytics tab needs it
   analyticsExpenses: null, // the rows behind those buckets, for Analytics' own list
@@ -183,7 +180,7 @@ function withCurrencyIn(text, code) {
   return SUFFIX_CURRENCIES.has(code) ? `${text} ${symbol}` : symbol + text;
 }
 
-// Same shape as fmt(), but for a currency that isn't the account's - used
+// Same shape as fmt(), but for a currency that isn't the user's - used
 // wherever an expense shows what was actually paid next to what it converted to.
 function fmtIn(amount, code) {
   const n = Number(amount) || 0;
@@ -195,7 +192,7 @@ function fmtIn(amount, code) {
 }
 
 // The currency an expense is being entered in right now: the picked one, or
-// the account's own when nothing has been picked.
+// the user's own when nothing has been picked.
 function entryCurrency() {
   return state.addCurrency || currentCurrency;
 }
@@ -705,8 +702,6 @@ function pillsHtml(options) {
     parts.push(`<button class="pill" data-action="open-period">${esc(options.periodLabel || t(periodKey(state.period)))}</button>`);
   }
 
-  parts.push(`<button class="pill" data-action="go-accounts">${esc(t("allAccounts"))}</button>`);
-
   if (options.activeCategory) {
     parts.push(`<button class="pill pill-active" data-action="clear-category">${esc(options.activeCategory)}
       <span class="pill-active-x">✕</span></button>`);
@@ -732,7 +727,7 @@ function txRowHtml(row) {
   const category = data.categories.find((c) => c.id === e.category_id);
   const emoji = category ? emojiForCategory(category) : "💰";
   // A converted expense shows what was actually paid under the note - the
-  // headline stays in the account's currency so the column still adds up.
+  // headline stays in the user's currency so the column still adds up.
   const paid = e.original_currency
     ? `<span class="tx-sub">${esc(t("paidIn", { amount: fmtIn(e.original_amount, e.original_currency) }))}</span>`
     : "";
@@ -932,7 +927,7 @@ function analyticsView() {
     </div>`;
 }
 
-function accountsView() {
+function profileView() {
   const me = data.me || {};
   const stats = data.stats || {};
   const name = me.display_name || (me.email || "").split("@")[0] || t("you");
@@ -947,7 +942,6 @@ function accountsView() {
     [fmt(stats.monthly_average || 0), t("statMonthlyAverage")],
     [stats.top_category || "—", t("statTopCategory")],
     [t("nDays", { n: stats.current_streak_days || 0 }), t("statStreak")],
-    [String(stats.linked_accounts || 0), t("statLinkedAccounts")],
   ].map(([value, label]) => `
     <div class="stat-cell">
       <div class="stat-value">${esc(value)}</div>
@@ -964,7 +958,6 @@ function accountsView() {
     ["open-categories", t("categories"), String(data.categories.length)],
     ["open-income", t("income"), periodOf(currentRange().start)],
     ["open-import", t("importSpreadsheet"), ".xlsx / .csv"],
-    ["open-whatsapp", t("whatsappLogging"), me.phone_number || t("notLinked")],
     ["open-rates", t("exchangeRates"), "EUR · USD · GBP · BTC · ETH"],
   ].map(([action, label, value]) => `
     <button class="card-row settings-row" data-action="${action}">
@@ -973,17 +966,8 @@ function accountsView() {
       <span class="chevron">›</span>
     </button>`).join("");
 
-  const accountRows = data.accounts.map((a) => `
-    <button class="card-row account-row" data-action="edit-account" data-id="${a.id}">
-      <span class="tile">${esc(a.icon)}</span>
-      <span class="tx-name">${esc(a.name)}
-        <span class="tx-sub">${esc([a.kind, a.last4 ? `·${a.last4}` : ""].filter(Boolean).join(" "))}</span>
-      </span>
-      <span class="tx-amount">${esc(fmt(a.balance))}</span>
-    </button>`).join("");
-
   return `
-    <div class="view accounts-view">
+    <div class="view profile-view">
       <button class="identity" data-action="open-profile">
         <span class="identity-avatar">${me.avatar_url ? `<img src="${esc(me.avatar_url)}" alt="" />` : esc(name.charAt(0).toUpperCase())}</span>
         <span class="identity-lines">
@@ -996,15 +980,7 @@ function accountsView() {
       <div class="stats-grid">${statCells}</div>
 
       <span class="caption section-caption">${esc(t("settings"))}</span>
-      <div class="card" style="margin-bottom:18px">${settingsRows}</div>
-
-      <span class="caption section-caption">${esc(t("accounts"))}</span>
-      <div class="card" style="margin-bottom:20px">
-        ${accountRows}
-        <button class="card-row settings-row" data-action="add-account">
-          <span class="settings-row-label" style="color:var(--text-muted)">+ ${esc(t("addAccount"))}</span>
-        </button>
-      </div>
+      <div class="card" style="margin-bottom:20px">${settingsRows}</div>
 
       <button class="danger-btn" data-action="logout">${esc(t("logout"))}</button>
       <button class="danger-btn danger-btn-quiet" data-action="open-delete-account">${esc(t("deleteAccount"))}</button>
@@ -1013,7 +989,7 @@ function accountsView() {
 
 // A page rather than a sheet: five rates, where each came from, and a small
 // converter so the numbers are usable rather than just readable. Reached from
-// the Accounts tab; it isn't a sixth tab because the tab bar is already full
+// the Profile tab; it isn't a sixth tab because the tab bar is already full
 // and this isn't something you check several times a day.
 function ratesView() {
   const rates = data.rates;
@@ -1021,7 +997,7 @@ function ratesView() {
   if (!rates) {
     return `
       <div class="view">
-        <button class="back-pill" data-action="go-accounts">← ${esc(t("back"))}</button>
+        <button class="back-pill" data-action="go-profile">← ${esc(t("back"))}</button>
         <p class="empty-note">${esc(t("loading"))}</p>
       </div>`;
   }
@@ -1029,7 +1005,7 @@ function ratesView() {
   if (!rates.rates.length) {
     return `
       <div class="view">
-        <button class="back-pill" data-action="go-accounts">← ${esc(t("back"))}</button>
+        <button class="back-pill" data-action="go-profile">← ${esc(t("back"))}</button>
         <p class="empty-note">${esc(t("ratesUnavailable"))}</p>
       </div>`;
   }
@@ -1067,7 +1043,7 @@ function ratesView() {
 
   return `
     <div class="view">
-      <button class="back-pill" data-action="go-accounts">← ${esc(t("back"))}</button>
+      <button class="back-pill" data-action="go-profile">← ${esc(t("back"))}</button>
 
       <div class="rates-head">
         <div class="caption">${esc(t("exchangeRates"))}</div>
@@ -1141,7 +1117,7 @@ function addSheet() {
   const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "⌫"]
     .map((k) => `<button class="key" data-action="key" data-value="${esc(k)}">${esc(k)}</button>`).join("");
 
-  // The account's own currency always sits first and is always present, even
+  // Your own currency always sits first and is always present, even
   // if it isn't one of the four - picking it is how you get back to no
   // conversion at all.
   const codes = [currentCurrency, ...ENTRY_CURRENCIES.filter((c) => c !== currentCurrency)];
@@ -1178,7 +1154,6 @@ function txSheet() {
   const category = data.categories.find((c) => c.id === expense.category_id);
   const meta = [
     [t("date"), parseDate(expense.date).toLocaleDateString(localeForLang(), { weekday: "short", day: "numeric", month: "short", year: "numeric" })],
-    [t("account"), expense.account_name || t("notSet")],
     [t("category"), expense.category_name || t("uncategorized")],
     // The rate is shown as it was on the day, not as it is now - it explains
     // the number stored on this row, which today's rate no longer would.
@@ -1342,13 +1317,6 @@ function deleteAccountSheet() {
     <p class="error">${esc(state.error)}</p>`, { persistent: true });
 }
 
-function whatsappSheet() {
-  return sheetShell(`
-    <div class="sheet-title">${esc(t("whatsappLogging"))}</div>
-    <p class="sheet-hint">${esc(t("whatsappHint"))}</p>
-    <button class="btn-primary" style="width:100%" data-action="close-sheet">${esc(t("close"))}</button>`);
-}
-
 function categoriesSheet() {
   const rows = decoratedCategories().map((c) => `
     <button class="card-row" data-action="edit-category" data-id="${c.id}">
@@ -1425,39 +1393,6 @@ function incomeSheet() {
     <p class="error">${esc(state.error)}</p>`, { persistent: true });
 }
 
-function accountEditSheet() {
-  const editing = data.accounts.find((a) => a.id === state.editingAccountId);
-  const icon = editing ? editing.icon : ACCOUNT_EMOJI_CHOICES[0];
-
-  return sheetShell(`
-    <div class="sheet-title">${esc(t(editing ? "editAccount" : "addAccount"))}</div>
-    <label class="field"><span>${esc(t("name"))}</span>
-      <input id="acc-name" type="text" value="${esc(editing ? editing.name : "")}" />
-    </label>
-    <div class="field"><span>${esc(t("iconEmoji"))}</span>
-      <div class="emoji-picker" id="acc-emoji">
-        ${ACCOUNT_EMOJI_CHOICES.map((e) => `<button type="button" class="emoji-swatch ${e === icon ? "is-selected" : ""}" data-action="pick-emoji" data-value="${esc(e)}">${esc(e)}</button>`).join("")}
-      </div>
-    </div>
-    <div class="field-row">
-      <label class="field"><span>${esc(t("accountKind"))}</span>
-        <input id="acc-kind" type="text" value="${esc(editing && editing.kind ? editing.kind : "")}" placeholder="${esc(t("accountKindPlaceholder"))}" />
-      </label>
-      <label class="field"><span>${esc(t("lastDigits"))}</span>
-        <input id="acc-last4" type="text" maxlength="4" value="${esc(editing && editing.last4 ? editing.last4 : "")}" />
-      </label>
-    </div>
-    <label class="field"><span>${esc(t("balance"))}</span>
-      <input id="acc-balance" type="number" step="0.01" value="${editing ? editing.balance : ""}" />
-    </label>
-    <div class="sheet-btn-row">
-      ${editing ? `<button class="btn-danger-soft" data-action="delete-account" data-id="${editing.id}">${esc(t("delete"))}</button>` : ""}
-      <button class="btn-secondary" data-action="close-sheet">${esc(t("cancel"))}</button>
-      <button class="btn-primary" data-action="save-account">${esc(t("save"))}</button>
-    </div>
-    <p class="error">${esc(state.error)}</p>`, { persistent: true });
-}
-
 function profileSheet() {
   const me = data.me || {};
   return sheetShell(`
@@ -1492,12 +1427,10 @@ const SHEETS = {
   theme: themeSheet,
   twofactor: twoFactorSheet,
   import: importSheet,
-  whatsapp: whatsappSheet,
   deleteAccount: deleteAccountSheet,
   categories: categoriesSheet,
   categoryEdit: categoryEditSheet,
   income: incomeSheet,
-  accountEdit: accountEditSheet,
   profile: profileSheet,
 };
 
@@ -1510,7 +1443,7 @@ const VIEWS = {
   detail: detailView,
   budget: budgetView,
   analytics: analyticsView,
-  accounts: accountsView,
+  profile: profileView,
 };
 
 function renderTabs() {
@@ -1546,14 +1479,12 @@ function render() {
 // --- loading -------------------------------------------------------------
 
 async function loadIdentity() {
-  const [me, stats, accounts] = await Promise.all([
+  const [me, stats] = await Promise.all([
     apiFetch("/api/me"),
     apiFetch("/api/me/stats"),
-    apiFetch("/api/accounts"),
   ]);
   data.me = me;
   data.stats = stats;
-  data.accounts = accounts;
   currentCurrency = me.currency || "USD";
 }
 
@@ -1718,7 +1649,7 @@ const ACTIONS = {
     if (state.view === "summary") state.selCat = null;
     if (state.view === "analytics" && !data.analyticsBuckets) return refresh();
   },
-  "go-accounts": () => { state.view = "accounts"; },
+  "go-profile": () => { state.view = "profile"; },
   "go-summary": () => { state.view = "summary"; state.selCat = null; },
   "open-category": (el) => { state.view = "detail"; state.selCat = Number(el.dataset.id); },
   "clear-category": () => { state.view = "summary"; state.selCat = null; },
@@ -1767,9 +1698,8 @@ const ACTIONS = {
       body: JSON.stringify({
         amount,
         category_id: state.addCatId,
-        account_id: data.accounts.length ? data.accounts[0].id : null,
         date: isoDate(new Date()),
-        // Omitted when it matches the account's currency, so the common case
+        // Omitted when it matches your own currency, so the common case
         // sends exactly what it always did.
         currency: state.addCurrency || undefined,
       }),
@@ -1827,7 +1757,6 @@ const ACTIONS = {
   },
   "open-import": () => { state.sheet = "import"; state.error = ""; },
   "run-import": () => runImport(),
-  "open-whatsapp": () => { state.sheet = "whatsapp"; },
 
   "open-rates": async () => {
     state.view = "rates";
@@ -1911,41 +1840,6 @@ const ACTIONS = {
   "delete-income": async (el) => {
     await apiFetch(`/api/income/${el.dataset.id}`, { method: "DELETE" });
     return refresh();
-  },
-
-  "add-account": () => { state.sheet = "accountEdit"; state.editingAccountId = null; state.error = ""; },
-  "edit-account": (el) => { state.sheet = "accountEdit"; state.editingAccountId = Number(el.dataset.id); state.error = ""; },
-  "save-account": async () => {
-    const name = document.getElementById("acc-name").value.trim();
-    if (!name) {
-      state.error = t("nameRequired");
-      return;
-    }
-    const icon = document.querySelector("#acc-emoji .is-selected");
-    const balanceRaw = document.getElementById("acc-balance").value;
-    const body = {
-      name,
-      kind: document.getElementById("acc-kind").value.trim() || null,
-      last4: document.getElementById("acc-last4").value.trim() || null,
-      balance: balanceRaw === "" ? 0 : Number(balanceRaw),
-      icon: icon ? icon.dataset.value : undefined,
-    };
-
-    if (state.editingAccountId) {
-      await apiFetch(`/api/accounts/${state.editingAccountId}`, {
-        method: "PUT",
-        body: JSON.stringify({ ...body, clear_kind: !body.kind, clear_last4: !body.last4 }),
-      });
-    } else {
-      await apiFetch("/api/accounts", { method: "POST", body: JSON.stringify(body) });
-    }
-    state.sheet = null;
-    return refresh({ identity: true });
-  },
-  "delete-account": async (el) => {
-    await apiFetch(`/api/accounts/${el.dataset.id}`, { method: "DELETE" });
-    state.sheet = null;
-    return refresh({ identity: true });
   },
 
   "open-profile": () => { state.sheet = "profile"; state.error = ""; },

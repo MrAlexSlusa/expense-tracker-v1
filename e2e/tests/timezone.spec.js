@@ -11,14 +11,14 @@ const settingsRow = (page, label) =>
   page.locator(".settings-row", { hasText: label });
 
 async function openTimeZoneSheet(page) {
-  await page.locator('[data-action="go-accounts"]').first().click();
+  await page.locator('[data-action="go-profile"]').first().click();
   await page.locator('[data-action="open-timezone"]').click();
   await expect(page.locator(".sheet-title")).toHaveText("Time zone");
 }
 
 test("the setting starts at UTC and offers this device's zone", async ({ page }) => {
   await signUp(page);
-  await page.locator('[data-action="go-accounts"]').first().click();
+  await page.locator('[data-action="go-profile"]').first().click();
   await expect(settingsRow(page, "Time zone")).toContainText("UTC (default)");
 
   await page.locator('[data-action="open-timezone"]').click();
@@ -49,7 +49,7 @@ test("the zone survives a reload", async ({ page }) => {
   await expect(settingsRow(page, "Time zone")).toContainText("America/New_York");
 
   await page.reload();
-  await page.locator('[data-action="go-accounts"]').first().click();
+  await page.locator('[data-action="go-profile"]').first().click();
   await expect(settingsRow(page, "Time zone")).toContainText("America/New_York");
 });
 
@@ -98,6 +98,6 @@ test("an impossible zone is refused and the previous one is kept", async ({ page
   expect(status).toBe(400);
 
   await page.reload();
-  await page.locator('[data-action="go-accounts"]').first().click();
+  await page.locator('[data-action="go-profile"]').first().click();
   await expect(settingsRow(page, "Time zone")).toContainText("Europe/Bucharest");
 });

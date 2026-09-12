@@ -83,22 +83,19 @@ class CategoryOut(BaseModel):
 class ExpenseCreateRequest(BaseModel):
     amount: float
     category_id: Optional[int] = None
-    account_id: Optional[int] = None
     date: Optional[str] = None  # "YYYY-MM-DD"; defaults to today
     note: Optional[str] = None
-    # The currency `amount` is written in. None (or the account's own
-    # currency) means no conversion; anything else is converted at the BNR
-    # reference rate and stored in the account's currency, with the original
-    # kept alongside it.
+    # The currency `amount` is written in. None (or the user's own currency)
+    # means no conversion; anything else is converted at the BNR reference
+    # rate and stored in the user's currency, with the original kept
+    # alongside it.
     currency: Optional[str] = None
 
 
 class ExpenseUpdateRequest(BaseModel):
     amount: Optional[float] = None
     category_id: Optional[int] = None
-    account_id: Optional[int] = None
     clear_category: bool = False
-    clear_account: bool = False
     date: Optional[str] = None  # "YYYY-MM-DD"
     note: Optional[str] = None
     currency: Optional[str] = None  # re-converts `amount` from this currency; see ExpenseCreateRequest
@@ -113,8 +110,6 @@ class ExpenseOut(BaseModel):
     category_id: Optional[int] = None
     category_name: Optional[str] = None
     category_icon: Optional[str] = None
-    account_id: Optional[int] = None
-    account_name: Optional[str] = None
     note: str
     date: str  # "YYYY-MM-DD"
 
@@ -163,21 +158,3 @@ class IncomeCreateRequest(BaseModel):
 class IncomeUpdateRequest(BaseModel):
     name: Optional[str] = None
     amount: Optional[float] = None
-
-
-class AccountCreateRequest(BaseModel):
-    name: str
-    kind: Optional[str] = None  # "Current" / "Debit" / "Wallet"
-    last4: Optional[str] = None
-    balance: float = 0.0
-    icon: Optional[str] = None
-
-
-class AccountUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    kind: Optional[str] = None
-    last4: Optional[str] = None
-    balance: Optional[float] = None
-    icon: Optional[str] = None
-    clear_kind: bool = False
-    clear_last4: bool = False
