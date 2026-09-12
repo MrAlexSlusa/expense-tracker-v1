@@ -116,6 +116,9 @@ const state = {
   searchOpen: false,
   q: "",
   amount: "", // keypad buffer
+  addKind: "Expense", // the + sheet logs a spend or an income line
+  addName: "", // income's own name field, kept here so keypad re-renders don't drop it
+  addPeriod: "", // "YYYY-MM" the income line is logged against; set when the sheet opens
   addCatId: null,
   addCurrency: null, // null = your own currency; otherwise an ENTRY_CURRENCIES code
   convAmount: "", // the rates page's converter
@@ -1111,8 +1114,15 @@ function periodSheet() {
 function convertedPreview() {
   const typed = parseFloat(state.amount);
   const active = entryCurrency();
-  if (active === currentCurrency || !typed || !ratesReady()) return "";
+  if (state.addKind === "Income" || active === currentCurrency || !typed || !ratesReady()) return "";
   return `≈ ${fmt(convertWithRates(typed, active, currentCurrency))}`;
+}
+
+// The typed amount as it reads on screen. Income is signed, and always in
+// your own currency - it has no entry currency to convert from.
+function keypadAmountText() {
+  if (state.addKind === "Income") return `+${withCurrencyIn(state.amount || "0", currentCurrency)}`;
+  return withCurrencyIn(state.amount || "0", entryCurrency());
 }
 
 // Typing a digit changes exactly two pieces of text. Rebuilding the whole sheet
@@ -1121,7 +1131,7 @@ function convertedPreview() {
 function patchAddSheet() {
   const display = document.querySelector(".keypad-amount");
   if (!display) return false;
-  display.textContent = withCurrencyIn(state.amount || "0", entryCurrency());
+  display.textContent = keypadAmountText();
   display.classList.toggle("is-empty", !state.amount);
   const conv = document.querySelector(".keypad-converted");
   if (conv) conv.textContent = convertedPreview();
@@ -1156,16 +1166,40 @@ function addSheet() {
   // and down under the thumb.
   const converted = `<div class="keypad-converted">${esc(convertedPreview())}</div>`;
 
+  const income = state.addKind === "Income";
+
+  // Income is a named line on a month, not a categorised transaction: no
+  // category, and the backend stores it in your own currency - so the pills
+  // and the currency chips give way to a name and the month it belongs to.
+  const kindToggle = `
+    <div class="segmented" style="margin-bottom:14px">
+      ${["Expense", "Income"].map((kind) => `
+        <button type="button" class="${kind === state.addKind ? "is-selected" : ""}"
+          data-action="set-add-kind" data-value="${kind}">${esc(t(kind.toLowerCase()))}</button>`).join("")}
+    </div>`;
+
+  const body = income
+    ? `<div class="field-row">
+         <label class="field"><span>${esc(t("name"))}</span>
+           <input id="income-keypad-name" type="text" value="${esc(state.addName)}" />
+         </label>
+         <label class="field"><span>${esc(t("month"))}</span>
+           <input id="income-keypad-period" type="month" value="${esc(state.addPeriod)}" />
+         </label>
+       </div>`
+    : `${converted}
+       <div class="cur-chip-row">${currencyChips}</div>
+       <div class="cat-pill-row">${pills || `<span class="note">${esc(t("noCategoriesYet"))}</span>`}</div>`;
+
   return sheetShell(`
-    <div class="sheet-caption">${esc(t("enterAmount"))}</div>
-    <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(withCurrencyIn(state.amount || "0", active))}</div>
-    ${converted}
-    <div class="cur-chip-row">${currencyChips}</div>
-    <div class="cat-pill-row">${pills || `<span class="note">${esc(t("noCategoriesYet"))}</span>`}</div>
+    ${kindToggle}
+    <div class="sheet-caption">${esc(t(income ? "enterIncomeAmount" : "enterAmount"))}</div>
+    <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(keypadAmountText())}</div>
+    ${body}
     <div class="keypad">${keys}</div>
     <div class="sheet-btn-row" style="margin-top:0">
       <button class="btn-secondary" data-action="close-sheet">${esc(t("cancel"))}</button>
-      <button class="btn-primary" data-action="save-expense">${esc(t("done"))}</button>
+      <button class="btn-primary" data-action="save-add">${esc(t("done"))}</button>
     </div>
     <p class="error">${esc(state.error)}</p>`, { add: true, persistent: true });
 }
@@ -1712,6 +1746,10 @@ const ACTIONS = {
   "open-add": () => {
     state.sheet = "add";
     state.amount = "";
+    state.addName = "";
+    // Income is month-keyed, so the sheet opens on the month being viewed -
+    // logging last month's salary shouldn't mean logging it against today.
+    state.addPeriod = periodOf(currentRange().start);
     state.error = "";
     if (state.addCatId == null) {
       const first = decoratedCategories()[0];
@@ -1723,6 +1761,38 @@ const ACTIONS = {
     return patchAddSheet() ? "no-render" : undefined;
   },
   "set-add-category": (el) => { state.addCatId = Number(el.dataset.id); },
+  "set-add-kind": (el) => { state.addKind = el.dataset.value; state.error = ""; },
+  // One button, two shapes - which one the keypad is in decides where the
+  // typed amount goes.
+  "save-add": async () => (state.addKind === "Income" ? ACTIONS["save-income"]() : ACTIONS["save-expense"]()),
+  "save-income": async () => {
+    const amount = parseFloat(state.amount);
+    if (!amount) {
+      state.sheet = null;
+      return;
+    }
+    const name = state.addName.trim();
+    if (!name) {
+      state.error = t("nameAndAmountRequired");
+      return;
+    }
+    const period = state.addPeriod || periodOf(new Date());
+    await apiFetch("/api/income", {
+      method: "POST",
+      body: JSON.stringify({ name, amount, period }),
+    });
+    state.sheet = null;
+    state.amount = "";
+    state.addName = "";
+    // Land on the Income list, so the line that was just added is visible
+    // rather than filed away somewhere the user has to go looking for - on
+    // the month it was written to, which may not be the one being viewed.
+    state.kind = "Income";
+    state.view = "activity";
+    state.period = "Monthly";
+    state.anchor = parseDate(`${period}-01`);
+    return refresh({ identity: true });
+  },
   "save-expense": async () => {
     const amount = parseFloat(state.amount);
     if (!amount) {
@@ -1959,6 +2029,20 @@ document.addEventListener("input", (event) => {
     return;
   }
 
+  // Written straight to state with no re-render: every keypad tap rebuilds the
+  // sheet, and the name has to survive that without losing the caret.
+  if (event.target.id === "income-keypad-name") {
+    state.addName = event.target.value;
+    return;
+  }
+
+  // Same reason - and a month input fires "input" on some browsers and only
+  // "change" on others, so it is read from both.
+  if (event.target.id === "income-keypad-period") {
+    state.addPeriod = event.target.value;
+    return;
+  }
+
   // The converter updates its own result node instead of re-rendering: a full
   // render would rebuild the input and drop the caret mid-number.
   if (event.target.id === "conv-amount") {
@@ -1972,6 +2056,10 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  if (event.target.id === "income-keypad-period") {
+    state.addPeriod = event.target.value;
+    return;
+  }
   if (event.target.id !== "conv-from" && event.target.id !== "conv-to") return;
   state.convFrom = document.getElementById("conv-from").value;
   state.convTo = document.getElementById("conv-to").value;
