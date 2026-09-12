@@ -39,7 +39,8 @@ test("Analytics opens on All time, not a preselected twelve months", async ({ pa
   await page.locator('[data-action="set-view"][data-value="analytics"]').click();
   await expect(page.locator(".chart-bar").first()).toBeVisible();
 
-  await expect(page.locator(".hero div").first()).toHaveText("All time");
+  // The hero says what the number is as well as which window it covers.
+  await expect(page.locator(".hero div").first()).toHaveText("Spent · all time");
   await expect(page.locator('.pill[data-action="open-period"]')).toHaveText("All time");
   // No clear-affordance, because there is no filter applied to clear.
   await expect(page.locator(".pill-outline-x")).toHaveCount(0);
@@ -56,9 +57,13 @@ test("picking a period on Analytics leaves the other tabs alone", async ({ page 
   await page.locator('[data-action="close-sheet"]').last().click();
   await expect(page.locator('.pill[data-action="open-period"]')).toContainText("Yearly");
 
-  // Activity still shows its own, separate default.
-  await page.locator('[data-action="set-view"][data-value="activity"]').click();
-  await expect(page.locator('.pill[data-action="open-period"]')).toHaveText("Monthly");
+  // Activity still shows its own, separate default. Its period lives in the
+  // hero button rather than a pill - Activity has no second copy of the
+  // control - and monthly reads as the month itself.
+  await page.locator('.tabbar [data-action="set-view"][data-value="activity"]').click();
+  const month = new Date().toLocaleDateString("en-US", { month: "long" });
+  await expect(page.locator(".hero-period-btn")).toContainText(month);
+  await expect(page.locator('.pill[data-action="open-period"]')).toHaveCount(0);
 });
 
 test("the privacy policy and terms are reachable from the login screen", async ({ page }) => {

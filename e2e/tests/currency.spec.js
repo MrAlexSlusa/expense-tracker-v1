@@ -23,7 +23,7 @@ async function setCurrency(page, code) {
   await page.locator(`[data-action="set-currency"][data-value="${code}"]`).click();
   await expect(page.locator(".sheet")).toHaveCount(0);
   // The picker lives on Profile; go back to the list the expense will land in.
-  await page.locator('[data-action="set-view"][data-value="activity"]').click();
+  await page.locator('.tabbar [data-action="set-view"][data-value="activity"]').click();
 }
 
 async function typeAmount(page, digits) {
@@ -36,7 +36,7 @@ test("the keypad offers the user's currency plus the ones BNR quotes", async ({ 
   await signUp(page);
   await setCurrency(page, RON_DEFAULT);
 
-  await page.locator('[data-action="open-add"]').click();
+  await page.locator('.fab').click();
   const chips = page.locator(".cur-chip");
   await expect(chips).toHaveText([RON_DEFAULT, "EUR", "USD", "GBP"]);
 
@@ -49,7 +49,7 @@ test("picking a currency previews the converted amount before saving", async ({ 
   await signUp(page);
   await setCurrency(page, RON_DEFAULT);
 
-  await page.locator('[data-action="open-add"]').click();
+  await page.locator('.fab').click();
   await typeAmount(page, "100");
   // In the user's own currency there is nothing to preview. The line still
   // holds its place - it is reserved so the keypad doesn't jump when a
@@ -71,7 +71,7 @@ test("a euro expense is stored in lei and counted in the month's total", async (
   await signUp(page);
   await setCurrency(page, RON_DEFAULT);
 
-  await page.locator('[data-action="open-add"]').click();
+  await page.locator('.fab').click();
   await typeAmount(page, "100");
   await page.locator('.cur-chip[data-value="EUR"]').click();
 
@@ -102,7 +102,7 @@ test("the transaction sheet explains the conversion it made", async ({ page }) =
   await signUp(page);
   await setCurrency(page, RON_DEFAULT);
 
-  await page.locator('[data-action="open-add"]').click();
+  await page.locator('.fab').click();
   await typeAmount(page, "50");
   await page.locator('.cur-chip[data-value="USD"]').click();
   await page.locator('[data-action="save-expense"]').click();

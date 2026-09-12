@@ -991,8 +991,23 @@ def update_expense(
         )
         if category is None:
             raise HTTPException(status_code=404, detail="Category not found")
+        # An expense logged from the app has no note of its own: it is labelled
+        # with its category's name, and the app shows that label as the row's
+        # title. So when the category moves, the auto-label has to move with it
+        # - otherwise a recategorised row keeps announcing the old category.
+        #
+        # A label counts as auto-generated if it reads as any of this user's
+        # category names (not just the current one, so a row that already
+        # drifted gets repaired) or as the placeholder a manual entry gets.
+        # Anything else is something the user wrote, and stays.
+        auto_labels = {
+            name for (name,) in db.query(BudgetCategory.name).filter(BudgetCategory.user_id == user.id)
+        }
+        auto_labels.update({"Manual entry", ""})
         expense.category_id = category.id
         expense.category = category.name
+        if (expense.raw_message or "").strip() in auto_labels:
+            expense.raw_message = category.name
     if payload.date is not None:
         expense.created_at = _parse_date_or_400(payload.date)
     if payload.note is not None:

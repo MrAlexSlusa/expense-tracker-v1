@@ -76,12 +76,42 @@ const EMOJI_BY_KEYWORD = [
   [["family", "kid", "child", "baby"], "👶"],
   [["tech", "gadget", "laptop"], "💻"],
 ];
-const EMOJI_CHOICES = [
-  "🏠", "🛒", "🍽️", "☕", "💡", "🛍️",
-  "🚇", "⛽", "💊", "🏋️", "🎬", "📺",
-  "✈️", "💹", "🎁", "🐶", "📚", "👶",
-  "💻", "🏦", "💳", "💵", "💰",
+// The picker's whole vocabulary: emoji plus the words that should find it.
+// Keywords are English because that is what the icons are named after; the
+// list is short enough to scan, so a Romanian user can also just look.
+const EMOJI_LIBRARY = [
+  ["🏠", "home house rent"], ["🏡", "house garden"], ["🏢", "office building work"],
+  ["🛏️", "bed bedroom sleep"], ["🛁", "bath bathroom"], ["🧹", "cleaning chores"],
+  ["🛒", "groceries shopping cart supermarket"], ["🍎", "fruit apple food"],
+  ["🥖", "bread bakery"], ["🥛", "milk dairy"], ["🧀", "cheese dairy"],
+  ["🍽️", "dining restaurant food out"], ["🍕", "pizza takeaway"],
+  ["🍔", "burger fastfood"], ["🍣", "sushi japanese"], ["🍜", "noodles asian"],
+  ["☕", "coffee cafe snack"], ["🍺", "beer drinks pub"], ["🍷", "wine drinks"],
+  ["🍸", "cocktail bar drinks"], ["🎂", "cake birthday party"],
+  ["🚗", "car auto driving"], ["⛽", "fuel petrol gas"], ["🚌", "bus transport"],
+  ["🚇", "metro subway transport"], ["🚆", "train rail"], ["🚲", "bike cycling"],
+  ["🛴", "scooter ride"], ["🚕", "taxi cab uber"], ["🅿️", "parking"],
+  ["✈️", "flight travel plane"], ["🧳", "luggage travel trip"], ["🏖️", "holiday beach vacation"],
+  ["🏨", "hotel stay"], ["🗺️", "map trip travel"],
+  ["💊", "pharmacy medicine health"], ["🩺", "doctor health clinic"], ["🦷", "dentist teeth"],
+  ["🏋️", "gym fitness sport"], ["⚽", "football sport"], ["🎾", "tennis sport"],
+  ["🧘", "yoga wellness"], ["💆", "spa beauty care"], ["💇", "haircut barber"],
+  ["🛍️", "shopping clothes bags"], ["👕", "clothes shirt"], ["👟", "shoes trainers"],
+  ["💍", "jewellery gift"], ["💄", "makeup cosmetics"],
+  ["💡", "utilities electricity bills"], ["💧", "water bills"], ["🔥", "gas heating"],
+  ["📶", "internet mobile data"], ["📱", "phone mobile"], ["📺", "tv streaming subscription"],
+  ["🎬", "cinema movies entertainment"], ["🎮", "games gaming"], ["🎵", "music spotify"],
+  ["📚", "education books course"], ["🎓", "school university tuition"], ["✏️", "stationery supplies"],
+  ["💻", "tech laptop computer"], ["🖥️", "desktop hardware"], ["🎧", "headphones audio"],
+  ["👶", "baby kids child"], ["🧸", "toys kids"], ["🐶", "pet dog"], ["🐱", "pet cat"],
+  ["🌱", "plants garden"], ["🛠️", "repairs diy tools"], ["🧾", "receipt fees admin"],
+  ["🏦", "bank fees"], ["💳", "card payment"], ["💵", "cash money"],
+  ["💰", "savings money"], ["💹", "investing stocks"], ["🎁", "gift present"],
+  ["💝", "donation charity"], ["📦", "delivery parcel"], ["📅", "subscription recurring"],
 ];
+
+// The category-guessing fallback still wants a plain list.
+const EMOJI_CHOICES = EMOJI_LIBRARY.map(([emoji]) => emoji);
 
 const GOAL_COLORS = { Wants: "#f5c542", Needs: "#4353ff", Savings: "#32d583" };
 const OVER_BUDGET_COLOR = "#f2295b";
@@ -122,6 +152,10 @@ const state = {
   convFrom: "EUR",
   convTo: "RON",
   txId: null,
+  // Set while the amount sheet is correcting a saved expense rather than
+  // logging a new one: same keypad, same category row, PUT instead of POST.
+  editTxId: null,
+  addDate: null, // "YYYY-MM-DD" - only editable while correcting
   editingCategoryId: null,
   busy: false,
   error: "",
@@ -693,12 +727,16 @@ function pillsHtml(options) {
 
   parts.push(`<button class="pill" data-action="toggle-kind">${esc(t(state.kind === "Income" ? "income" : "expenses"))}</button>`);
 
+  // Only screens without a period button in their hero carry one here: on
+  // Activity and Budget the hero already says "September ⌄", and a second
+  // control for the same choice a few pixels below it is clutter, not a
+  // shortcut.
   if (options.fixedPeriodLabel) {
     // A period that can be cleared back off carries the ✕; the unfiltered
-    // default (Analytics' "All time") is just a plain pill with nothing to clear.
+    // default is a plain pill with nothing to clear.
     parts.push(`<button class="pill pill-outline" data-action="open-period">${esc(options.fixedPeriodLabel)}
       <span class="pill-outline-x" data-action="clear-period">✕</span></button>`);
-  } else {
+  } else if (options.period) {
     parts.push(`<button class="pill" data-action="open-period">${esc(options.periodLabel || t(periodKey(state.period)))}</button>`);
   }
 
@@ -742,9 +780,9 @@ function transactionListHtml() {
   if (state.kind === "Income") {
     const rows = incomeRows();
     if (!rows.length) {
-      return `<div class="list-region"><p class="empty-note">${esc(t("noIncomeYet"))}</p></div>`;
+      return `<div class="list-region" id="tx-list"><p class="empty-note">${esc(t("noIncomeYet"))}</p></div>`;
     }
-    return `<div class="list-region"><div style="margin-top:18px"></div>${rows.map((row) => `
+    return `<div class="list-region" id="tx-list"><div style="margin-top:18px"></div>${rows.map((row) => `
       <button class="tx-row ${row.radius} ${row.divider ? "has-divider" : ""}" data-action="open-income" data-id="${row.income.id}">
         <span class="tile">💵</span>
         <span class="tx-name">${esc(row.income.name)}</span>
@@ -754,14 +792,21 @@ function transactionListHtml() {
 
   const rows = transactionRows();
   if (!rows.length) {
-    const message = state.q.trim() ? t("noMatches", { query: state.q.trim() }) : t("noExpensesInPeriod");
-    return `<div class="list-region"><p class="empty-note">${esc(message)}</p></div>`;
+    // A search that found nothing is a dead end you back out of; an empty
+    // period is one you fill, so it offers the way to do that rather than
+    // leaving you to find the + yourself.
+    const searching = !!state.q.trim();
+    const message = searching ? t("noMatches", { query: state.q.trim() }) : t("noExpensesInPeriod");
+    return `<div class="list-region" id="tx-list">
+      <p class="empty-note">${esc(message)}</p>
+      ${searching ? "" : `<button class="empty-cta" data-action="open-add">${esc(t("logFirstExpense"))}</button>`}
+    </div>`;
   }
 
   const html = rows.map((row) => (row.kind === "header"
     ? `<div class="day-header ${row.first ? "is-first" : ""}"><span>${esc(row.label)}</span><span>${esc(row.total)}</span></div>`
     : txRowHtml(row))).join("");
-  return `<div class="list-region">${html}</div>`;
+  return `<div class="list-region" id="tx-list">${html}</div>`;
 }
 
 // --- the six screens -----------------------------------------------------
@@ -846,7 +891,7 @@ function detailView() {
           ${category.target ? `<div class="hero-caption">${esc(t("ofTarget", { target: fmt(category.target) }))}</div>` : ""}
         </div>
       </div>
-      ${pillsHtml({ activeCategory: category.name })}
+      ${pillsHtml({ activeCategory: category.name, period: true })}
       <div class="list-region" style="padding-top:14px">
         ${expenses.length ? `<div class="card">${rows}</div>` : `<p class="empty-note">${esc(t("noExpensesInPeriod"))}</p>`}
       </div>
@@ -907,23 +952,159 @@ function budgetView() {
     </div>`;
 }
 
+// --- analytics -----------------------------------------------------------
+// Activity answers "what did I spend, and on what" - a list you scroll and
+// search. Analytics answers "is this getting better or worse", which a list
+// can't: it needs two windows of time held against each other. So this screen
+// carries no transactions and no search at all; those live on Activity.
+
+// Per-day average over the days that actually have history behind them. On
+// "All time" the range starts at the epoch, so dividing by the range would
+// report pennies a day; what counts is the span from the first expense to
+// today.
+function perDayAverage(expenses, range) {
+  if (!expenses.length) return 0;
+  const first = expenses.reduce((min, e) => (e.date < min ? e.date : min), expenses[0].date);
+  const from = new Date(Math.max(range.start.getTime(), parseDate(first).getTime()));
+  const to = new Date(Math.min(range.end.getTime(), Date.now()));
+  const days = Math.max(1, daysBetween(from, to) + 1);
+  return expenses.reduce((sum, e) => sum + e.amount, 0) / days;
+}
+
+function busiestDay(expenses) {
+  const byDay = new Map();
+  expenses.forEach((e) => byDay.set(e.date, (byDay.get(e.date) || 0) + e.amount));
+  let best = null;
+  byDay.forEach((value, date) => {
+    if (!best || value > best.value) best = { date, value };
+  });
+  return best;
+}
+
+// The two most recent calendar months present in the data, compared per
+// category. Months rather than "last 30 days" because that is the window the
+// rest of the app already thinks in - budgets and targets are monthly.
+function categoryMovers(expenses) {
+  const months = [...new Set(expenses.map((e) => e.date.slice(0, 7)))].sort();
+  if (months.length < 2) return null;
+  const [prevKey, curKey] = [months[months.length - 2], months[months.length - 1]];
+
+  // The current month is usually half-finished, and a half month always looks
+  // like a collapse next to a whole one. So both sides are cut at the same day
+  // of the month: Sep 1-12 against Aug 1-12, not against all of August.
+  const lastDay = Math.max(...expenses
+    .filter((e) => e.date.slice(0, 7) === curKey)
+    .map((e) => Number(e.date.slice(8, 10))));
+  const partial = lastDay < daysInMonth(curKey);
+
+  const totalsFor = (key, cutoff) => {
+    const totals = new Map();
+    expenses.filter((e) => e.date.slice(0, 7) === key
+      && (!cutoff || Number(e.date.slice(8, 10)) <= cutoff)).forEach((e) => {
+      const id = e.category_id == null ? "none" : e.category_id;
+      totals.set(id, (totals.get(id) || 0) + e.amount);
+    });
+    return totals;
+  };
+  const cutoff = partial ? lastDay : null;
+  const prev = totalsFor(prevKey, cutoff);
+  const cur = totalsFor(curKey, cutoff);
+
+  const rows = [...new Set([...prev.keys(), ...cur.keys()])].map((id) => {
+    const category = data.categories.find((c) => c.id === id);
+    const before = prev.get(id) || 0;
+    const after = cur.get(id) || 0;
+    return {
+      name: category ? category.name : t("uncategorized"),
+      emoji: category ? emojiForCategory(category) : "💰",
+      before,
+      after,
+      delta: after - before,
+      // A category that is new this month has no percentage to report - it
+      // went from nothing, which is not "up 100%", it is simply new.
+      pct: before > 0 ? ((after - before) / before) * 100 : null,
+    };
+  });
+
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  return { prevKey, curKey, partialTo: partial ? lastDay : null, rows: rows.slice(0, 5) };
+}
+
+function daysInMonth(key) {
+  const [year, month] = key.split("-").map(Number);
+  return new Date(year, month, 0).getDate();
+}
+
+function monthLabel(key) {
+  const [year, month] = key.split("-").map(Number);
+  return monthName(new Date(year, month - 1, 1), "short");
+}
+
+function statCell(label, value, sub) {
+  return `<div class="stat-cell">
+      <span class="stat-label">${esc(label)}</span>
+      <span class="stat-value">${esc(value)}</span>
+      ${sub ? `<span class="stat-sub">${esc(sub)}</span>` : ""}
+    </div>`;
+}
+
+function moversHtml(movers) {
+  if (!movers) {
+    return `<p class="empty-note">${esc(t("needTwoMonths"))}</p>`;
+  }
+  const rows = movers.rows.map((r) => {
+    const up = r.delta > 0;
+    const pct = r.pct == null
+      ? t("newThisMonth")
+      : `${up ? "↑" : "↓"} ${Math.abs(r.pct).toFixed(0)}%`;
+    return `<div class="mover-row">
+        <span class="tile">${esc(r.emoji)}</span>
+        <span class="mover-name">${esc(r.name)}
+          <span class="mover-sub">${esc(fmt(r.before))} → ${esc(fmt(r.after))}</span>
+        </span>
+        <span class="mover-delta ${r.delta === 0 ? "is-flat" : up ? "is-up" : "is-down"}">${esc(pct)}</span>
+      </div>`;
+  }).join("");
+
+  return `
+    <div class="section-head">
+      <span>${esc(t("whatMoved"))}</span>
+      <span class="section-sub">${esc(movers.partialTo
+        ? t("firstNDays", { n: movers.partialTo, current: monthLabel(movers.curKey), previous: monthLabel(movers.prevKey) })
+        : `${monthLabel(movers.curKey)} ${t("vs")} ${monthLabel(movers.prevKey)}`)}</span>
+    </div>
+    <div class="card card-16">${rows}</div>`;
+}
+
 function analyticsView() {
   if (!data.analyticsBuckets) {
     return `<div class="view"><p class="empty-note">${esc(t("loading"))}</p></div>`;
   }
   const series = data.analyticsBuckets;
+  const expenses = data.analyticsExpenses || [];
   const total = series.buckets.reduce((sum, b) => sum + b.value, 0);
   const label = state.analyticsPeriod ? t(periodKey(state.analyticsPeriod)) : t("allTime");
+  const range = analyticsRange();
+  const busiest = busiestDay(expenses);
+  const biggest = expenses.reduce((max, e) => (!max || e.amount > max.amount ? e : max), null);
 
   return `
     <div class="view">
       <div class="hero">
-        <div style="color:var(--text-muted);font-size:15px">${esc(label)}</div>
+        <div style="color:var(--text-muted);font-size:15px">${esc(t("spentIn", { period: label.toLowerCase() }))}</div>
         <div class="hero-amount-sm">${esc(fmt(total))}</div>
       </div>
+      <div class="pill-row">
+        <button class="pill" data-action="open-period">${esc(label)}</button>
+      </div>
       ${chartBlock(series, { months: series.byMonth, roundScale: true, k: true })}
-      ${pillsHtml({ search: true, fixedPeriodLabel: state.analyticsPeriod ? label : null, periodLabel: label })}
-      ${transactionListHtml()}
+      <div class="stat-grid">
+        ${statCell(t("perDay"), fmt(perDayAverage(expenses, range)))}
+        ${statCell(t("busiestDay"), busiest ? fmt(busiest.value) : fmt(0), busiest ? dayLabel(busiest.date) : "")}
+        ${statCell(t("biggestExpense"), biggest ? fmt(biggest.amount) : fmt(0), biggest ? (biggest.category_name || t("uncategorized")) : "")}
+      </div>
+      ${moversHtml(categoryMovers(expenses))}
+      <button class="link-row" data-action="set-view" data-value="activity">${esc(t("seeAllTransactions"))} →</button>
     </div>`;
 }
 
@@ -1156,16 +1337,27 @@ function addSheet() {
   // and down under the thumb.
   const converted = `<div class="keypad-converted">${esc(convertedPreview())}</div>`;
 
+  const editing = state.editTxId != null;
+  // Only a correction shows the date: when logging, the date is now, and a
+  // field saying so is one more thing to read past on the way to the keypad.
+  const dateRow = editing
+    ? `<div class="date-row">
+         <span>${esc(t("date"))}</span>
+         <input id="add-date" type="date" value="${esc(state.addDate || "")}" />
+       </div>`
+    : "";
+
   return sheetShell(`
-    <div class="sheet-caption">${esc(t("enterAmount"))}</div>
+    <div class="sheet-caption">${esc(editing ? t("editExpense") : t("enterAmount"))}</div>
     <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(withCurrencyIn(state.amount || "0", active))}</div>
     ${converted}
     <div class="cur-chip-row">${currencyChips}</div>
     <div class="cat-pill-row">${pills || `<span class="note">${esc(t("noCategoriesYet"))}</span>`}</div>
+    ${dateRow}
     <div class="keypad">${keys}</div>
     <div class="sheet-btn-row" style="margin-top:0">
       <button class="btn-secondary" data-action="close-sheet">${esc(t("cancel"))}</button>
-      <button class="btn-primary" data-action="save-expense">${esc(t("done"))}</button>
+      <button class="btn-primary" data-action="save-expense">${esc(editing ? t("save") : t("done"))}</button>
     </div>
     <p class="error">${esc(state.error)}</p>`, { add: true, persistent: true });
 }
@@ -1201,7 +1393,7 @@ function txSheet() {
     </div>
     <div class="card card-16">${meta}</div>
     <div class="sheet-btn-row">
-      <button class="btn-secondary" style="height:48px;font-size:15.5px" data-action="close-sheet">${esc(t("close"))}</button>
+      <button class="btn-secondary" style="height:48px;font-size:15.5px" data-action="edit-expense" data-id="${expense.id}">${esc(t("edit"))}</button>
       <button class="btn-danger-soft" data-action="delete-expense" data-id="${expense.id}">${esc(t("delete"))}</button>
     </div>`);
 }
@@ -1371,8 +1563,18 @@ function categoryEditSheet() {
       <input id="cat-name" type="text" value="${esc(editing ? editing.name : "")}" />
     </label>
     <div class="field"><span>${esc(t("iconEmoji"))}</span>
-      <div class="emoji-picker" id="cat-emoji">
-        ${EMOJI_CHOICES.map((e) => `<button type="button" class="emoji-swatch ${e === icon ? "is-selected" : ""}" data-action="pick-emoji" data-value="${esc(e)}">${esc(e)}</button>`).join("")}
+      <div class="emoji-field">
+        <button type="button" class="emoji-button" id="cat-emoji" data-action="toggle-emoji-pop"
+          data-value="${esc(icon)}">${esc(icon)}</button>
+        <span class="emoji-hint">${esc(t("tapToChangeIcon"))}</span>
+      </div>
+      <div class="emoji-pop" id="emoji-pop" hidden>
+        <input id="emoji-search" type="text" autocomplete="off" placeholder="${esc(t("searchEmoji"))}" />
+        <div class="emoji-grid" id="emoji-grid">
+          ${EMOJI_LIBRARY.map(([e, words]) => `<button type="button" class="emoji-swatch" data-action="pick-emoji"
+            data-value="${esc(e)}" data-words="${esc(words)}">${esc(e)}</button>`).join("")}
+        </div>
+        <p class="emoji-empty" id="emoji-empty" hidden>${esc(t("noEmojiMatch"))}</p>
       </div>
     </div>
     <label class="field"><span>${esc(t("monthlyTarget"))}</span>
@@ -1483,10 +1685,19 @@ function renderTabs() {
 }
 
 let renderedSheet = null;
+let renderedView = null;
+let renderedSearchOpen = false;
 
 function render() {
   const root = document.getElementById("view-root");
   root.innerHTML = (VIEWS[state.view] || activityView)();
+  // The fade-and-rise belongs to arriving on a screen. Replaying it on every
+  // state change - a filter, a deleted row, a keystroke - is what made the app
+  // feel like it was permanently re-entering itself.
+  if (state.view !== renderedView) {
+    root.querySelector(".view")?.classList.add("view-enter");
+    renderedView = state.view;
+  }
   renderTabs();
 
   // A re-render while the same sheet stays open (picking a category, switching
@@ -1502,11 +1713,23 @@ function render() {
     if (sheet) sheet.scrollTop = scrollTop;
   }
 
-  const search = document.getElementById("search-input");
-  if (search) {
-    search.focus();
-    search.setSelectionRange(search.value.length, search.value.length);
+  // Focus is placed once, when the field opens - not on every pass. Putting it
+  // back on every render fought the iOS keyboard and threw the caret to the end
+  // mid-word. Typing no longer renders at all; see the input handler.
+  if (state.searchOpen && !renderedSearchOpen) {
+    document.getElementById("search-input")?.focus();
   }
+  renderedSearchOpen = state.searchOpen;
+}
+
+// Typing in the search field changes which rows match and nothing else, so it
+// repaints the list alone. A full render would rebuild the input under the
+// caret, which on iOS drops the keyboard for a frame on every letter.
+function patchTransactionList() {
+  const list = document.getElementById("tx-list");
+  if (!list) return false;
+  list.replaceWith(document.createRange().createContextualFragment(transactionListHtml()));
+  return true;
 }
 
 // --- loading -------------------------------------------------------------
@@ -1712,6 +1935,9 @@ const ACTIONS = {
   "open-add": () => {
     state.sheet = "add";
     state.amount = "";
+    state.editTxId = null;
+    state.addCurrency = null;
+    state.addDate = isoDate(new Date());
     state.error = "";
     if (state.addCatId == null) {
       const first = decoratedCategories()[0];
@@ -1723,27 +1949,49 @@ const ACTIONS = {
     return patchAddSheet() ? "no-render" : undefined;
   },
   "set-add-category": (el) => { state.addCatId = Number(el.dataset.id); },
+  // The date field is read straight from the DOM rather than mirrored into
+  // state on every keystroke: a native date input owns its own editing.
   "save-expense": async () => {
     const amount = parseFloat(state.amount);
     if (!amount) {
       state.sheet = null;
+      state.editTxId = null;
       return;
     }
-    await apiFetch("/api/expenses", {
-      method: "POST",
-      body: JSON.stringify({
-        amount,
-        category_id: state.addCatId,
-        date: isoDate(new Date()),
-        // Omitted when it matches your own currency, so the common case
-        // sends exactly what it always did.
-        currency: state.addCurrency || undefined,
-      }),
-    });
+    const dateField = document.getElementById("add-date");
+    const body = {
+      amount,
+      category_id: state.addCatId,
+      date: (dateField && dateField.value) || state.addDate || isoDate(new Date()),
+      // Omitted when it matches your own currency, so the common case
+      // sends exactly what it always did.
+      currency: state.addCurrency || undefined,
+    };
+    await apiFetch(
+      state.editTxId != null ? `/api/expenses/${state.editTxId}` : "/api/expenses",
+      { method: state.editTxId != null ? "PUT" : "POST", body: JSON.stringify(body) },
+    );
     state.sheet = null;
     state.amount = "";
     state.addCurrency = null;
+    state.editTxId = null;
+    state.txId = null;
     return refresh({ identity: true, months: true });
+  },
+  // Correcting reopens the sheet that logged it, prefilled - so there is one
+  // way to say "this much, this category", not two that drift apart.
+  "edit-expense": (el) => {
+    const expense = data.expenses.find((e) => e.id === Number(el.dataset.id));
+    if (!expense) return;
+    state.editTxId = expense.id;
+    // What you typed originally, in the currency you typed it in.
+    const typed = expense.original_amount != null ? expense.original_amount : expense.amount;
+    state.amount = String(Number(typed));
+    state.addCurrency = expense.original_currency || null;
+    state.addCatId = expense.category_id;
+    state.addDate = expense.date;
+    state.sheet = "add";
+    state.error = "";
   },
   "open-tx": (el) => { state.sheet = "tx"; state.txId = Number(el.dataset.id); },
   "delete-expense": async (el) => {
@@ -1752,7 +2000,7 @@ const ACTIONS = {
     state.txId = null;
     return refresh({ identity: true, months: true });
   },
-  "close-sheet": () => { state.sheet = null; state.error = ""; },
+  "close-sheet": () => { state.sheet = null; state.error = ""; state.editTxId = null; },
 
   "open-currency": () => { state.sheet = "currency"; },
   "open-timezone": () => { state.sheet = "timezone"; state.error = ""; },
@@ -1814,9 +2062,24 @@ const ACTIONS = {
   "open-categories": () => { state.sheet = "categories"; state.error = ""; },
   "new-category": () => { state.sheet = "categoryEdit"; state.editingCategoryId = null; state.error = ""; },
   "edit-category": (el) => { state.sheet = "categoryEdit"; state.editingCategoryId = Number(el.dataset.id); state.error = ""; },
+  // The panel and the picked icon are kept in the DOM rather than in state:
+  // a render would rebuild the name field under the caret. Same reason the
+  // tag row works this way.
+  "toggle-emoji-pop": () => {
+    const pop = document.getElementById("emoji-pop");
+    if (!pop) return "no-render";
+    pop.hidden = !pop.hidden;
+    if (!pop.hidden) document.getElementById("emoji-search")?.focus();
+    return "no-render";
+  },
   "pick-emoji": (el) => {
-    el.parentElement.querySelectorAll(".emoji-swatch").forEach((b) => b.classList.remove("is-selected"));
-    el.classList.add("is-selected");
+    const button = document.getElementById("cat-emoji");
+    if (button) {
+      button.dataset.value = el.dataset.value;
+      button.textContent = el.dataset.value;
+    }
+    const pop = document.getElementById("emoji-pop");
+    if (pop) pop.hidden = true;
     return "no-render";
   },
   "pick-tag": (el) => {
@@ -1831,7 +2094,7 @@ const ACTIONS = {
       return;
     }
     const targetRaw = document.getElementById("cat-target").value;
-    const icon = document.querySelector("#cat-emoji .is-selected");
+    const icon = document.getElementById("cat-emoji");
     const tag = document.querySelector("#cat-tag .is-selected");
     const body = {
       name,
@@ -1955,7 +2218,19 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("input", (event) => {
   if (event.target.id === "search-input") {
     state.q = event.target.value;
-    render();
+    if (!patchTransactionList()) render();
+    return;
+  }
+
+  if (event.target.id === "emoji-search") {
+    const query = event.target.value.trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll("#emoji-grid .emoji-swatch").forEach((swatch) => {
+      const hit = !query || swatch.dataset.words.includes(query) || swatch.dataset.value === query;
+      swatch.hidden = !hit;
+      if (hit) shown++;
+    });
+    document.getElementById("emoji-empty").hidden = shown > 0;
     return;
   }
 

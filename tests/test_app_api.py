@@ -182,3 +182,43 @@ def test_reimporting_same_period_replaces_not_duplicates():
 
     r = client.get("/api/income?period=2026-01", headers=_auth(token))
     assert len(r.json()) == 2  # not doubled
+
+
+def test_recategorising_moves_the_auto_label_but_keeps_a_real_note():
+    """
+    An app-logged expense has no note of its own - it is labelled with its
+    category's name, and that label is what the transaction row shows. Moving
+    the expense to another category has to move the label too, or the row goes
+    on announcing the category it no longer belongs to. A note the user wrote
+    is theirs and stays put.
+    """
+    token = _signup("recat@example.com")
+    cats = client.post("/api/budget/categories", headers=_auth(token), json={"name": "Groceries"}).json()
+    other = client.post("/api/budget/categories", headers=_auth(token), json={"name": "Transport"}).json()
+
+    auto = client.post("/api/expenses", headers=_auth(token),
+                       json={"amount": 30.0, "category_id": cats["id"]}).json()
+    assert auto["note"] == "Groceries"
+
+    moved = client.put(f"/api/expenses/{auto['id']}", headers=_auth(token),
+                       json={"category_id": other["id"]}).json()
+    assert moved["category_name"] == "Transport"
+    assert moved["note"] == "Transport"
+
+    written = client.post("/api/expenses", headers=_auth(token),
+                          json={"amount": 12.0, "category_id": cats["id"], "note": "birthday cake"}).json()
+    kept = client.put(f"/api/expenses/{written['id']}", headers=_auth(token),
+                      json={"category_id": other["id"]}).json()
+    assert kept["category_name"] == "Transport"
+    assert kept["note"] == "birthday cake"
+
+    # A label that already drifted - it names a category, just not this row's
+    # current one - is still an auto label, and gets put right on the next move.
+    drifted = client.post("/api/expenses", headers=_auth(token),
+                          json={"amount": 9.0, "category_id": cats["id"], "note": "Transport"}).json()
+    repaired = client.put(f"/api/expenses/{drifted['id']}", headers=_auth(token),
+                          json={"category_id": other["id"]}).json()
+    assert repaired["note"] == "Transport"  # moved to Transport, and now says so
+    back = client.put(f"/api/expenses/{drifted['id']}", headers=_auth(token),
+                      json={"category_id": cats["id"]}).json()
+    assert back["note"] == "Groceries"
