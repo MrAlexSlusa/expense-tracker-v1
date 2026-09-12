@@ -52,6 +52,14 @@
 
   --gutter: 18px;
   --app-width: 440px;
+
+  /* The page is drawn edge to edge (viewport-fit=cover in index.html), so the
+     hardware - Dynamic Island up top, home indicator below - sits on top of it
+     unless every edge pays these back. Zero on hardware that has neither. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 /*
@@ -122,7 +130,9 @@ body {
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
   color: var(--text);
-  min-height: 100vh;
+  /* dvh, not vh: on iOS Safari 100vh is the height with the toolbars hidden,
+     so a vh-sized column is taller than the screen and the bottom is cut. */
+  min-height: 100dvh;
   background-image: var(--bg-glow-1), var(--bg-glow-2);
   background-attachment: fixed;
 }
@@ -132,6 +142,32 @@ input,
 select,
 textarea {
   font-family: inherit;
+}
+
+/* Taps land immediately (no wait to see whether a double-tap is coming) and
+   without Safari's grey flash or an accidental text selection on a long press.
+   Inputs keep their selection - you have to be able to place a caret. */
+button,
+.tab,
+.pill,
+.key,
+.card-row,
+.tx-row,
+.cat-pill,
+.cur-chip,
+.emoji-swatch {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 16px is the threshold under which iOS zooms the page when a field is
+   focused - which then leaves the layout shifted. */
+input,
+select,
+textarea {
+  font-size: max(16px, 1em);
 }
 
 /* Scrollbars are hidden everywhere - the pill rows and sheets scroll by touch. */
@@ -178,15 +214,17 @@ textarea {
 /* ---------------------------------------------------------------- shell */
 
 .screen {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   justify-content: center;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
 }
 
 .app-column {
   width: 100%;
   max-width: var(--app-width);
-  min-height: 100vh;
+  min-height: 100dvh;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -197,7 +235,8 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px var(--gutter) 6px;
+  /* The island's own inset, then the design's 14px on top of it. */
+  padding: calc(var(--safe-top) + 14px) var(--gutter) 6px;
 }
 
 .diamond-btn {
@@ -233,10 +272,16 @@ textarea {
 .scroll-region {
   flex: 1;
   overflow-y: auto;
-  padding-bottom: 150px;
+  /* Clears the dock, plus the home indicator under it. */
+  padding-bottom: calc(150px + var(--safe-bottom));
+  /* Momentum scrolling, and no rubber-banding of the page behind it. */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
-.view {
+/* Only a screen you have just arrived on animates in. Every other render
+   leaves the view where it is - see render() in app.js. */
+.view-enter {
   animation: viewIn 0.28s ease both;
 }
 
@@ -983,19 +1028,21 @@ textarea {
   justify-content: center;
   pointer-events: none;
   z-index: 30;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
 }
 
 .dock-inner {
   width: 100%;
   max-width: var(--app-width);
   position: relative;
-  height: 170px;
+  height: calc(170px + var(--safe-bottom));
 }
 
 .fab {
   position: absolute;
   right: 20px;
-  bottom: 104px;
+  bottom: calc(104px + var(--safe-bottom));
   width: 58px;
   height: 58px;
   border-radius: 50%;
@@ -1020,7 +1067,7 @@ textarea {
   position: absolute;
   left: 12px;
   right: 12px;
-  bottom: 14px;
+  bottom: calc(14px + var(--safe-bottom));
   pointer-events: auto;
   height: 70px;
   border-radius: 26px;
@@ -1083,12 +1130,12 @@ textarea {
 .sheet {
   width: 100%;
   max-width: var(--app-width);
-  max-height: 92vh;
+  max-height: 92dvh;
   overflow-y: auto;
   background: var(--surface-alt);
   border-radius: 26px 26px 0 0;
   border-top: 1px solid var(--white-08);
-  padding: 10px var(--gutter) 26px;
+  padding: 10px var(--gutter) calc(26px + var(--safe-bottom));
   animation: sheetUp 0.3s cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
@@ -1355,27 +1402,82 @@ textarea {
   color: #fff;
 }
 
-.emoji-picker {
+/* The icon is picked the way a document icon is: you press the icon itself,
+   and a panel opens under it. The old strip put two dozen emoji permanently
+   in the middle of the form, which read as clutter rather than a choice. */
+.emoji-field {
   display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 4px;
+  align-items: center;
+  gap: 12px;
+}
+
+.emoji-button {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: 14px;
+  background: var(--white-05);
+  border: 1px solid var(--white-10);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.emoji-button:hover { background: var(--white-11); }
+
+.emoji-hint {
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+
+.emoji-pop {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--white-08);
+}
+
+.emoji-pop input {
+  width: 100%;
+  height: 38px;
+  margin-bottom: 8px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--white-05);
+  border: 1px solid var(--white-10);
+  color: var(--text);
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
+  gap: 6px;
+  max-height: 188px;
+  overflow-y: auto;
 }
 
 .emoji-swatch {
-  width: 42px;
   height: 42px;
-  flex: none;
   border-radius: 12px;
-  background: var(--white-05);
-  border: 1px solid var(--white-10);
-  font-size: 19px;
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 21px;
   cursor: pointer;
 }
 
-.emoji-swatch.is-selected {
-  border-color: var(--accent);
-  background: rgba(67, 83, 255, 0.16);
+.emoji-swatch:hover {
+  background: var(--white-07);
+  border-color: var(--white-10);
+}
+
+.emoji-empty {
+  margin: 10px 4px 2px;
+  color: var(--text-dim);
+  font-size: 13.5px;
 }
 
 .error {
@@ -1396,11 +1498,11 @@ textarea {
 .auth-column {
   width: 100%;
   max-width: var(--app-width);
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 32px var(--gutter);
+  padding: calc(32px + var(--safe-top)) var(--gutter) calc(32px + var(--safe-bottom));
 }
 
 .auth-mark {
@@ -1876,3 +1978,153 @@ textarea {
   line-height: 1.5;
   margin: 0 2px 20px;
 }
+
+
+/* --- analytics: the trends screen -------------------------------------- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 16px 0 20px;
+}
+
+.stat-cell {
+  padding: 12px 12px 13px;
+  border-radius: 16px;
+  background: var(--white-05);
+  border: 1px solid var(--white-07);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.stat-label {
+  color: var(--text-dim);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stat-value {
+  font-size: 17px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stat-sub {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 4px 10px;
+  font-size: 15.5px;
+  font-weight: 600;
+}
+
+.section-sub {
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.mover-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.mover-row + .mover-row {
+  border-top: 1px solid var(--divider);
+}
+
+.mover-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+}
+
+.mover-sub {
+  display: block;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mover-delta {
+  font-size: 14.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Spending more is the bad direction here, so up is the warning colour - the
+   opposite of a stock chart, and deliberately so. */
+.mover-delta.is-up { color: var(--danger); }
+.mover-delta.is-down { color: var(--positive); }
+.mover-delta.is-flat { color: var(--text-dim); }
+
+/* A plain way out of a screen that deliberately has no list on it. */
+.link-row {
+  display: block;
+  width: 100%;
+  margin: 18px 0 4px;
+  padding: 14px;
+  border: 1px solid var(--white-08);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.link-row:hover { background: var(--white-05); }
+
+/* --- correcting a saved expense ---------------------------------------- */
+
+.date-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0 2px;
+  color: var(--text-muted);
+  font-size: 14.5px;
+}
+
+.date-row input {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: var(--white-05);
+  border: 1px solid var(--white-10);
+  color: var(--text);
+}
+
+/* An empty period is a state you get out of by adding something, so the way
+   to do that is on the screen rather than left to be discovered. */
+.empty-cta {
+  display: block;
+  margin: 14px auto 0;
+  padding: 12px 22px;
+  border-radius: 999px;
+  border: 1px solid var(--white-10);
+  background: var(--white-05);
+  color: var(--text-soft);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.empty-cta:hover { background: var(--white-11); }
