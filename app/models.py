@@ -6,14 +6,11 @@ from app.database import Base
 
 class User(Base):
     """
-    A user can come from either channel: a WhatsApp number (no signup form
-    needed) or an app account (email + password). Both columns are nullable
-    since a given user may only ever use one of the two.
+    An app account: email plus either a password or a social provider.
     """
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
-    phone_number = Column(String, unique=True, nullable=True, index=True)
     email = Column(String, unique=True, nullable=True, index=True)
     hashed_password = Column(String, nullable=True)
     currency = Column(String, nullable=False, default="USD")
@@ -43,7 +40,6 @@ class User(Base):
     expenses = relationship("Expense", back_populates="user")
     categories = relationship("BudgetCategory", back_populates="user")
     income_sources = relationship("IncomeSource", back_populates="user")
-    accounts = relationship("Account", back_populates="user")
 
 
 class OtpCode(Base):
@@ -105,30 +101,6 @@ class IncomeSource(Base):
     user = relationship("User", back_populates="income_sources")
 
 
-class Account(Base):
-    """
-    A place money is spent from - a bank account, a card, or cash. Purely
-    descriptive: the balance is a number the user maintains, not something
-    derived from Expense rows, because most of what lands in an account
-    (salary, transfers) never passes through this app. Expenses point at one
-    optionally, so a transaction can say where it came from without
-    accounts being mandatory for the WhatsApp flow.
-    """
-    __tablename__ = "accounts"
-
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
-    kind = Column(String, nullable=True)  # "Current" / "Debit" / "Wallet" - free text, shown as the row subtitle
-    last4 = Column(String, nullable=True)  # last digits of the card/account, if it has any
-    balance = Column(Float, nullable=False, default=0.0)
-    icon = Column(String, nullable=False, default="🏦")  # emoji shown in the UI
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    user = relationship("User", back_populates="accounts")
-    expenses = relationship("Expense", back_populates="account")
-
-
 class Expense(Base):
     __tablename__ = "expenses"
 
@@ -140,9 +112,8 @@ class Expense(Base):
     raw_message = Column(String, nullable=False)  # always keep the original text for debugging/trust
     created_at = Column(DateTime, default=datetime.utcnow)
     source = Column(String, nullable=True)  # "import" for spreadsheet-imported rows, None otherwise
-    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)  # which account it was paid from, if known
 
-    # An expense paid in a currency other than the account's default keeps
+    # An expense paid in a currency other than the user's default keeps
     # both numbers. `amount` above is ALWAYS in the user's currency - every
     # total, target and chart sums that column, so a mixed-currency ledger
     # would otherwise add lei to euros. These three record what was actually
@@ -156,4 +127,3 @@ class Expense(Base):
 
     user = relationship("User", back_populates="expenses")
     matched_category = relationship("BudgetCategory", back_populates="expenses")
-    account = relationship("Account", back_populates="expenses")

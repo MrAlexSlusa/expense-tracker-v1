@@ -840,9 +840,9 @@ textarea {
   flex: none;
 }
 
-/* ------------------------------------------------------------ accounts */
+/* ------------------------------------------------------------- profile */
 
-.accounts-view {
+.profile-view {
   padding: 4px var(--gutter) 0;
 }
 
@@ -954,10 +954,6 @@ textarea {
 .chevron {
   color: var(--text-faint);
   font-size: 16px;
-}
-
-.account-row {
-  padding: 14px 16px;
 }
 
 .danger-btn {
@@ -1096,6 +1092,10 @@ textarea {
   animation: sheetUp 0.3s cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
+/* A sheet that was already open and merely re-rendered keeps its position. */
+.sheet.no-anim,
+.sheet-scrim.no-anim { animation: none; }
+
 .grab {
   width: 38px;
   height: 4px;
@@ -1213,6 +1213,9 @@ textarea {
 
 .keypad-amount {
   text-align: center;
+  /* Even-width digits: with proportional ones, a centred number shuffles the
+     digits already typed sideways every time another one lands. */
+  font-variant-numeric: tabular-nums;
   font-size: 48px;
   font-weight: 700;
   letter-spacing: -0.03em;
@@ -1773,6 +1776,8 @@ textarea {
    same number restated rather than a second amount being entered. */
 .keypad-converted {
   text-align: center;
+  /* Holds its line whether or not there is a conversion to show. */
+  min-height: 1.3em;
   margin-top: -6px;
   color: var(--text-muted);
   font-size: 15px;
@@ -1780,7 +1785,7 @@ textarea {
 }
 
 /* The converted-from line sits under the note rather than running on after it.
-   Scoped to transaction rows: .tx-sub is shared with the account and detail
+   Scoped to transaction rows: .tx-sub is shared with the detail
    lists, whose current one-line look isn't mine to change here. */
 .tx-row .tx-sub {
   display: block;

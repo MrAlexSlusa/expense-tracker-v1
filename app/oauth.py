@@ -1,9 +1,9 @@
 """
-Social sign-in (Google, Apple, GitHub) as a third identity path alongside the
-email/password accounts in app/auth.py and the WhatsApp phone numbers in
-app/webhook.py. All three land on the same User row, matched by verified
-email address, so signing in with Google to an account that was created with
-a password gets you that same account rather than a duplicate.
+Social sign-in (Google, Apple, GitHub) as a second identity path alongside the
+email/password accounts in app/auth.py. Both land on the same User row,
+matched by verified email address, so signing in with Google to an account
+that was created with a password gets you that same account rather than a
+duplicate.
 
 The flow is server-side authorization code, not a browser-side implicit grant,
 because the frontend is a static bundle on GitHub Pages: it can't hold a client

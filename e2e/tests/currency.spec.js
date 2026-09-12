@@ -2,7 +2,7 @@ const { test, expect } = require("@playwright/test");
 const { signUp } = require("./helpers");
 
 /*
- * Logging an expense in a currency that isn't the account's, and the page that
+ * Logging an expense in a currency that isn't the user's, and the page that
  * shows where the rates come from.
  *
  * The conversion arithmetic is covered by the backend tests; this covers the
@@ -15,14 +15,14 @@ const { signUp } = require("./helpers");
  * hold whatever this week's number happens to be.
  */
 
-const RON_ACCOUNT = "RON";
+const RON_DEFAULT = "RON";
 
 async function setCurrency(page, code) {
-  await page.locator('[data-action="go-accounts"]').first().click();
+  await page.locator('[data-action="go-profile"]').first().click();
   await page.locator('[data-action="open-currency"]').click();
   await page.locator(`[data-action="set-currency"][data-value="${code}"]`).click();
   await expect(page.locator(".sheet")).toHaveCount(0);
-  // The picker lives on Accounts; go back to the list the expense will land in.
+  // The picker lives on Profile; go back to the list the expense will land in.
   await page.locator('[data-action="set-view"][data-value="activity"]').click();
 }
 
@@ -32,27 +32,29 @@ async function typeAmount(page, digits) {
   }
 }
 
-test("the keypad offers the account's currency plus the ones BNR quotes", async ({ page }) => {
+test("the keypad offers the user's currency plus the ones BNR quotes", async ({ page }) => {
   await signUp(page);
-  await setCurrency(page, RON_ACCOUNT);
+  await setCurrency(page, RON_DEFAULT);
 
   await page.locator('[data-action="open-add"]').click();
   const chips = page.locator(".cur-chip");
-  await expect(chips).toHaveText([RON_ACCOUNT, "EUR", "USD", "GBP"]);
+  await expect(chips).toHaveText([RON_DEFAULT, "EUR", "USD", "GBP"]);
 
-  // The account's own currency leads and starts selected - that is the state
+  // The user's own currency leads and starts selected - that is the state
   // in which nothing is converted at all.
   await expect(chips.first()).toHaveClass(/is-selected/);
 });
 
 test("picking a currency previews the converted amount before saving", async ({ page }) => {
   await signUp(page);
-  await setCurrency(page, RON_ACCOUNT);
+  await setCurrency(page, RON_DEFAULT);
 
   await page.locator('[data-action="open-add"]').click();
   await typeAmount(page, "100");
-  // In the account's own currency there is nothing to preview.
-  await expect(page.locator(".keypad-converted")).toHaveCount(0);
+  // In the user's own currency there is nothing to preview. The line still
+  // holds its place - it is reserved so the keypad doesn't jump when a
+  // conversion appears - so what's asserted is that it says nothing.
+  await expect(page.locator(".keypad-converted")).toHaveText("");
 
   await page.locator('.cur-chip[data-value="EUR"]').click();
   await expect(page.locator(".keypad-amount")).toHaveText("€100");
@@ -67,13 +69,17 @@ test("picking a currency previews the converted amount before saving", async ({ 
 
 test("a euro expense is stored in lei and counted in the month's total", async ({ page }) => {
   await signUp(page);
-  await setCurrency(page, RON_ACCOUNT);
+  await setCurrency(page, RON_DEFAULT);
 
   await page.locator('[data-action="open-add"]').click();
   await typeAmount(page, "100");
   await page.locator('.cur-chip[data-value="EUR"]').click();
 
-  const previewed = Number((await page.locator(".keypad-converted").innerText()).replace(/[^\d.]/g, ""));
+  // The line is always in the DOM (it holds its place so the keypad can't
+  // jump), so reading it has to wait for the rates rather than for the node.
+  const preview = page.locator(".keypad-converted");
+  await expect(preview).toContainText("lei");
+  const previewed = Number((await preview.innerText()).replace(/[^\d.]/g, ""));
   await page.locator('[data-action="save-add"]').click();
   await expect(page.locator(".sheet")).toHaveCount(0);
 
@@ -94,7 +100,7 @@ test("a euro expense is stored in lei and counted in the month's total", async (
 
 test("the transaction sheet explains the conversion it made", async ({ page }) => {
   await signUp(page);
-  await setCurrency(page, RON_ACCOUNT);
+  await setCurrency(page, RON_DEFAULT);
 
   await page.locator('[data-action="open-add"]').click();
   await typeAmount(page, "50");
@@ -112,7 +118,7 @@ test("the transaction sheet explains the conversion it made", async ({ page }) =
 
 test("the rates page lists all five currencies and names each source", async ({ page }) => {
   await signUp(page);
-  await page.locator('[data-action="go-accounts"]').first().click();
+  await page.locator('[data-action="go-profile"]').first().click();
   await page.locator('[data-action="open-rates"]').click();
 
   const rows = page.locator(".rate-row");
@@ -129,7 +135,7 @@ test("the rates page lists all five currencies and names each source", async ({ 
 
 test("the converter on the rates page follows what you type", async ({ page }) => {
   await signUp(page);
-  await page.locator('[data-action="go-accounts"]').first().click();
+  await page.locator('[data-action="go-profile"]').first().click();
   await page.locator('[data-action="open-rates"]').click();
 
   await page.locator("#conv-amount").fill("250");

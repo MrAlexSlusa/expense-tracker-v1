@@ -3,18 +3,7 @@ import re
 from typing import List, Optional
 
 
-def normalize_phone(phone_number: str) -> str:
-    """
-    Guards against a real failure mode: '+' is the URL-encoding character for
-    a space, so a client that doesn't percent-encode it (or a proxy that
-    mangles it) turns 'whatsapp:+407...' into 'whatsapp: 407...' silently.
-    Applied consistently at every entry point so lookups and writes always
-    agree on the same stored format.
-    """
-    return phone_number.strip().replace(" ", "+")
-
-
-FALLBACK_CATEGORY_NAME = "Altele"  # kept for app/sheets.py, which only ever reads Romanian spreadsheets
+FALLBACK_CATEGORY_NAME = "Altele"  # the Romanian original, kept because existing data still uses it
 # One fallback category name per app language (see app/quiz.py FALLBACK_NAMES_BY_LANG) -
 # a user's fallback category is named for whichever language was active at signup/quiz
 # time, so matching has to recognize all of them, not just the Romanian original.

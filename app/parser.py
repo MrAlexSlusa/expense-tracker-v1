@@ -1,5 +1,5 @@
 """
-Parses free-text WhatsApp messages into an (amount, category) pair.
+Parses free-text expense messages into an (amount, category) pair.
 
 Design choice: people won't remember a strict syntax, so this accepts loose,
 natural phrasing rather than requiring something like "/expense 20 coffee".

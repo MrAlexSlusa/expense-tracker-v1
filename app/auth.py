@@ -1,8 +1,6 @@
 """
-Email/password auth for the app frontend, separate from the phone-number
-identity used by the WhatsApp webhook. Both paths land on the same User
-model (see app/models.py) so a future "link your WhatsApp number" feature
-is just filling in a column, not a migration.
+Email/password auth for the app frontend: hashing, JWTs, and the one-time
+codes used for login 2FA and password resets.
 """
 
 import os
