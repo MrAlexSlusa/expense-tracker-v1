@@ -44,7 +44,9 @@ The floating **+** opens a keypad sheet that logs an expense, or — with the
 Expense / Income toggle at its top — an income line that adds to the month
 instead of subtracting from it: same keypad, but a name replaces the category
 pills, since income is a named line on a month rather than a categorised
-transaction. Saving one lands on the Income list so it's visible. Tapping a
+transaction. A month picker sits beside the name, defaulting to the month
+being viewed, so last month's salary doesn't have to land on this one.
+Saving one lands on the Income list for that month, so it's visible. Tapping a
 transaction opens a sheet with its date, account and category, and a delete.
 
 **Periods.** The period sheet offers Daily / Weekly / Monthly / Yearly /

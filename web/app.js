@@ -119,6 +119,7 @@ const state = {
   amount: "", // keypad buffer
   addKind: "Expense", // the + sheet logs a spend or an income line
   addName: "", // income's own name field, kept here so keypad re-renders don't drop it
+  addPeriod: "", // "YYYY-MM" the income line is logged against; set when the sheet opens
   addCatId: null,
   addCurrency: null, // null = the account's own currency; otherwise an ENTRY_CURRENCIES code
   convAmount: "", // the rates page's converter
@@ -1173,9 +1174,14 @@ function addSheet() {
     </div>`;
 
   const body = income
-    ? `<label class="field"><span>${esc(t("name"))}</span>
-         <input id="income-keypad-name" type="text" value="${esc(state.addName)}" />
-       </label>`
+    ? `<div class="field-row">
+         <label class="field"><span>${esc(t("name"))}</span>
+           <input id="income-keypad-name" type="text" value="${esc(state.addName)}" />
+         </label>
+         <label class="field"><span>${esc(t("month"))}</span>
+           <input id="income-keypad-period" type="month" value="${esc(state.addPeriod)}" />
+         </label>
+       </div>`
     : `${converted}
        <div class="cur-chip-row">${currencyChips}</div>
        <div class="cat-pill-row">${pills || `<span class="note">${esc(t("noCategoriesYet"))}</span>`}</div>`;
@@ -1772,6 +1778,9 @@ const ACTIONS = {
     state.sheet = "add";
     state.amount = "";
     state.addName = "";
+    // Income is month-keyed, so the sheet opens on the month being viewed -
+    // logging last month's salary shouldn't mean logging it against today.
+    state.addPeriod = periodOf(currentRange().start);
     state.error = "";
     if (state.addCatId == null) {
       const first = decoratedCategories()[0];
@@ -1795,19 +1804,21 @@ const ACTIONS = {
       state.error = t("nameAndAmountRequired");
       return;
     }
+    const period = state.addPeriod || periodOf(new Date());
     await apiFetch("/api/income", {
       method: "POST",
-      // Month-keyed like every other income row, on the month being entered -
-      // today's, since that is the day the keypad logs against.
-      body: JSON.stringify({ name, amount, period: periodOf(new Date()) }),
+      body: JSON.stringify({ name, amount, period }),
     });
     state.sheet = null;
     state.amount = "";
     state.addName = "";
     // Land on the Income list, so the line that was just added is visible
-    // rather than filed away somewhere the user has to go looking for.
+    // rather than filed away somewhere the user has to go looking for - on
+    // the month it was written to, which may not be the one being viewed.
     state.kind = "Income";
     state.view = "activity";
+    state.period = "Monthly";
+    state.anchor = parseDate(`${period}-01`);
     return refresh({ identity: true });
   },
   "save-expense": async () => {
@@ -2090,6 +2101,13 @@ document.addEventListener("input", (event) => {
     return;
   }
 
+  // Same reason - and a month input fires "input" on some browsers and only
+  // "change" on others, so it is read from both.
+  if (event.target.id === "income-keypad-period") {
+    state.addPeriod = event.target.value;
+    return;
+  }
+
   // The converter updates its own result node instead of re-rendering: a full
   // render would rebuild the input and drop the caret mid-number.
   if (event.target.id === "conv-amount") {
@@ -2103,6 +2121,10 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  if (event.target.id === "income-keypad-period") {
+    state.addPeriod = event.target.value;
+    return;
+  }
   if (event.target.id !== "conv-from" && event.target.id !== "conv-to") return;
   state.convFrom = document.getElementById("conv-from").value;
   state.convTo = document.getElementById("conv-to").value;
