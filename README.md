@@ -1,28 +1,26 @@
 # Expense Tracker
 
-Log an expense by texting it, or from the app. Same backend, two front doors.
+Log an expense from the app: a PWA frontend on a FastAPI + SQL backend.
 
 ## What's built (v1)
 
 v1 rebuilds `web/` against the "deep navy" design system — a five-tab mobile
-app shell (Activity / Summary / Budget / Analytics / Accounts) with a
+app shell (Activity / Summary / Budget / Analytics / Profile) with a
 drill-down category view and three bottom sheets — replacing v0's amber
 "Ink & Lamplight" screens. The backend is the same one, extended with
-accounts and free date ranges to back the new screens. See
+free date ranges to back the new screens. See
 **[The app](#the-app)** below.
 
 - `app/parser.py` — turns free text ("50 groceries", "spent 30 on lunch", "12,50 lei cafea") into an amount + category. 11 tests, all passing, including European comma-decimals.
-- `app/webhook.py` — receives WhatsApp messages in Twilio's exact webhook format and replies with a confirmation.
-- `app/api.py` — read endpoints: full expense list and a spend-by-category summary, per phone number; plus the app's auth/budget/quiz endpoints (see below).
-- `app/auth.py` — email/password accounts with JWT tokens, plus OTP helpers (login 2FA, password reset). Separate identity path from the WhatsApp phone-number flow, same User/Expense tables.
-- `app/oauth.py` — Google / Apple / GitHub sign-in as a third identity path onto the same User rows, matched on verified email. Server-side authorization-code flow, since a static frontend can't hold a client secret. Every provider is optional and self-configuring from environment variables — see setup below.
+- `app/api.py` — the app's auth, expense, budget, income and quiz endpoints (see below).
+- `app/auth.py` — email/password accounts with JWT tokens, plus OTP helpers (login 2FA, password reset).
+- `app/oauth.py` — Google / Apple / GitHub sign-in as a second identity path onto the same User rows, matched on verified email. Server-side authorization-code flow, since a static frontend can't hold a client secret. Every provider is optional and self-configuring from environment variables — see setup below.
 - `app/email_sender.py` — sends OTP codes via [Resend](https://resend.com); if `RESEND_API_KEY` isn't set, it logs the email (and code) to the console instead of failing, so the whole flow is testable locally with no account needed.
 - `app/quiz.py` — the signup personality quiz: 4 questions map to tag-weighted scores over a category pool, picking 5 starting budget categories tailored to the answers instead of one generic fixed set.
 - `app/models.py` / `app/database.py` — SQLite locally, Postgres in production via `DATABASE_URL`; nothing else changes between the two. `ensure_columns` in `database.py` adds columns a database created by an earlier deploy is missing, since `create_all` only ever creates whole tables and there's no Alembic setup here. The engine uses `pool_pre_ping` — see [Why the pool pings](#why-the-pool-pings) for the failure it prevents.
-- `app/sheets.py` — mirrors each expense into a personal Google Sheet budget spreadsheet (see setup below). Optional — only used by the WhatsApp flow.
 - `web/privacy.html` / `web/terms.html` — the privacy policy and terms, written against what the app actually does rather than boilerplate. Plain static pages sharing `style.css`, so they follow the app's chosen theme; linked from the foot of the login screen.
 - `web/` — an installable PWA (no build step, plain HTML/CSS/JS) served by FastAPI at `/app`. Stepping stone to a native App Store/Play Store app — see below.
-- 5 end-to-end tests simulating real Twilio-shaped requests through the full pipeline, plus unit tests for the category-matching logic.
+- Unit and API tests over the whole pipeline: parsing, category matching, auth, budgets, currency conversion and account deletion.
 
 ## The app
 
@@ -38,10 +36,10 @@ with anything else.
 | **Summary** | A donut of the period's spend, and the categories ranked by amount with their share as a percentage. Tapping one drills into a single-category ring. |
 | **Budget** | Spend against `of $X planned · day N of M`, the Wants/Needs/Savings goal split, and a progress bar per category that turns red past its target. |
 | **Analytics** | Spend over time as bars, with that range's transactions below it. Unlike the other tabs it starts with **no** period filter — all time, from the earliest expense to now — and keeps its own period selection, so narrowing Analytics doesn't move Activity or Budget with it. |
-| **Accounts** | Profile, six stat cells from `/api/me/stats`, settings, the accounts you spend from, and log out. |
+| **Profile** | Your identity, five stat cells from `/api/me/stats`, settings, and log out. |
 
 The floating **+** opens a keypad sheet that logs an expense; tapping a
-transaction opens a sheet with its date, account and category, and a delete.
+transaction opens a sheet with its date and category, and a delete.
 
 **Periods.** The period sheet offers Daily / Weekly / Monthly / Yearly /
 Last 12 months, plus **All time** on Analytics, which is where that tab
@@ -52,7 +50,7 @@ one per day.
 
 **Time zones.** Every expense is stored as a UTC instant and always has been.
 What changed is that the *day* it counts under is now measured in the user's
-own zone, set from Accounts → Settings → Time zone (which offers the browser's
+own zone, set from Profile → Settings → Time zone (which offers the browser's
 detected zone in one tap). Unset means UTC.
 
 This matters more than it sounds. The app previously mixed two clocks: expenses
@@ -80,14 +78,14 @@ the browser, which is the default and what the app always did) or
 so flipping it mid-session re-homes the live token rather than logging anyone
 out, and turning it off also forgets the remembered email.
 
-**Deleting an account** is Accounts → Delete account, which asks for the
+**Deleting an account** is Profile → Delete account, which asks for the
 password again (or, for a social-only account with no password, for the word
 DELETE typed out) before calling `DELETE /api/me`. A 401 there means a wrong
 password, not an expired session, so `apiFetch` takes a `credentialCheck` flag
 that suppresses its usual log-out-and-bounce behaviour — without it a typo
 threw the user out of the app.
 
-**Categories, income and profile** are edited from rows in Accounts →
+**Categories, income and profile** are edited from rows in Profile →
 Settings, since the design covers the five tabs but not the management
 screens they need. **Theme** (dark/light/system) and **language** (EN/ES/FR/RO)
 are local settings; **currency** and **two-factor** are stored on the account.
@@ -131,13 +129,12 @@ On a phone, open that same URL in the browser and use "Add to Home Screen" (Safa
 - `POST /api/auth/reset-password` — `{"email": ..., "code": ..., "new_password": ...}`.
 - `PUT /api/me/two-factor` — `{"enabled": true|false}` (needs `Authorization: Bearer <token>`). When on, every login emails a 6-digit code that has to be verified before a JWT is issued.
 - `GET /api/me` — current user, including `two_factor_enabled`, `onboarded`, `oauth_provider` and `has_password`.
-- `DELETE /api/me` — erases the account and everything belonging to it (expenses, categories, accounts, income, OTP codes), in one transaction. An account with a password must re-send it in the body: a 30-day bearer token sitting in browser storage is too weak a proof for something irreversible. A social-only account has no password to ask for and deletes on the token alone.
+- `DELETE /api/me` — erases the account and everything belonging to it (expenses, categories, income, OTP codes), in one transaction. An account with a password must re-send it in the body: a 30-day bearer token sitting in browser storage is too weak a proof for something irreversible. A social-only account has no password to ask for and deletes on the token alone.
 - `GET /api/auth/providers` — which social sign-in buttons the login screen should draw. Empty until credentials are configured (see below).
 - `GET /api/auth/oauth/{provider}/start?redirect_uri=...` → 302 to Google/Apple/GitHub; `GET|POST /api/auth/oauth/{provider}/callback` → 302 back to `redirect_uri` with the app JWT in the URL fragment (`#token=...`), or `#oauth_error=...`.
 - `GET /api/quiz` — the onboarding quiz's questions/options (text only — the tag weights used for scoring stay server-side).
 - `POST /api/onboarding/complete` — `{"answers": {"weekend": "food", ...}}`, replaces the signup-time placeholder category with the 5 quiz-picked ones and marks the account onboarded.
-- `GET /api/budget` — this user's budget categories and running totals (the in-app version of the Google Sheet mirror — no Google Sheets setup required for the app to work).
-- `GET/POST/PUT/DELETE /api/accounts` — the accounts money is spent from (name, type, last 4 digits, balance, emoji). Descriptive only: the balance is a number you maintain, not a ledger derived from expenses, since most of what moves through a real account never passes through this app. Expenses optionally carry an `account_id`; deleting an account leaves its expenses intact and unattributed.
+- `GET /api/budget` — this user's budget categories and running totals for the period.
 - `GET /api/budget`, `GET /api/budget/goals` and `GET /api/expenses` also take `start` and `end` (`YYYY-MM-DD`, inclusive, given together) instead of `period`, for the ranges the app's period sheet offers that a single month can't express.
 - `PUT /api/me/timezone` — `{"timezone": "Europe/Bucharest"}`, an IANA name, or `""` for UTC. Validated against the system zone database; an unknown name is a 400.
 - `PUT /api/me/profile` — `{"display_name": ..., "avatar_url": ...}`, a small (<500KB) `data:image/...` URL for the profile picture.
@@ -148,7 +145,7 @@ On a phone, open that same URL in the browser and use "Add to Home Screen" (Safa
 
 ### Setting up social sign-in (optional)
 
-Google, Apple and GitHub are a third way into the same accounts, alongside email/password and the WhatsApp phone number. Each is independent: a provider's button only appears once its credentials are in the environment, and a deploy with none of them configured behaves exactly as it did before.
+Google, Apple and GitHub are a second way into the same accounts, alongside email/password. Each is independent: a provider's button only appears once its credentials are in the environment, and a deploy with none of them configured behaves exactly as it did before.
 
 The flow is server-side authorization code, not a browser-side implicit grant — the frontend is a static bundle on GitHub Pages and can't hold a client secret, so the backend does the exchange and hands back its own JWT. Accounts are matched on **verified** email, so signing in with Google to an address that already has a password gets that same account, not a second one. New social accounts get no password and still run the onboarding quiz.
 
@@ -224,19 +221,26 @@ Without any configuration, OTP codes for login/reset just get printed to the ser
 
 The PWA is deliberately framework-free so nothing here is wasted work: wrapping it in [Capacitor](https://capacitorjs.com/) later gets you a real iOS/Android binary from the same HTML/CSS/JS, calling the same JSON API. Bigger changes than styling — offline queueing, push notifications for spend alerts, App Store review requirements (privacy policy, account deletion) — are easier to reason about once the wrapping step happens, not before.
 
-## Test it without a real Twilio account yet
+## Clearing out the accounts feature
+
+The "accounts you spend from" feature was removed. The code no longer knows
+about it, but a database created before the removal still has the `accounts`
+table and the `expenses.account_id` column: `create_all` only ever creates
+tables and `ensure_columns` only ever adds columns, so nothing drops them on
+its own. They are inert - no query touches them - so this is tidiness rather
+than a fix.
 
 ```bash
-curl -X POST http://localhost:8000/webhook/whatsapp \
-  -d "From=whatsapp:+40712345678" \
-  -d "Body=50 groceries"
+python scripts/drop_account_tables.py        # show the plan
+python scripts/drop_account_tables.py --yes  # apply it
 ```
 
-Then check the summary:
-
-```bash
-curl http://localhost:8000/api/users/whatsapp:+40712345678/summary
-```
+It reads `DATABASE_URL` exactly as the app does, so point that at production to
+clean production. `--yes` is required rather than a prompt, because an
+accidental run against a live database should do nothing. The expenses
+themselves are untouched - only which account paid for them goes, along with
+the accounts and their balances. Running it twice is safe; the second run says
+there is nothing to do.
 
 ## Why the pool pings
 
@@ -309,53 +313,18 @@ catch a regression a unit test cannot see.
 
 ## What's NOT built yet (in order)
 
-1. **Real Twilio connection** — needs a Twilio account + a public URL. ✅ done, if you've followed the deploy steps.
-2. **Google Sheet mirror** — ✅ done, code-wise. See setup below to connect your own sheet.
-3. **A visual frontend** — ✅ done; `web/` is the app described above.
-4. **Filtering by account or category from the pills** — the `All accounts` and `All categories` pills navigate, as the design specifies; neither filters the data yet.
-5. **Editing an expense in place** — the transaction sheet offers Close and Delete, per the design. `PUT /api/expenses/{id}` exists and is unused by the app.
-6. **Loading and error states** — the design doesn't cover skeletons or error copy; failures currently surface as a message where one fits.
-7. **Multi-currency handling** — the account has a currency, but amounts are stored as plain numbers with no per-expense currency or conversion.
-8. **Apple sign-in** — the code path is written and unit-tested; it's waiting on a paid Apple Developer account. Google and GitHub are already live.
-9. **Payments** — wire this in before polishing anything else.
-
-## Setting up the Google Sheet (one-time)
-
-This syncs to a personal budget sheet with a fixed set of category rows and a
-running total per category (e.g. `Supermarket | 859,96 lei`) — texting an
-expense doesn't add a new row, it adds the amount to the matching category's
-total. Each month is its own spreadsheet **file** (e.g. "2026 Aug Budget"),
-not a tab within one ongoing file — the app always writes to whichever
-file's Sheet ID is set as `GOOGLE_SHEET_ID`, on that file's first tab.
-
-This uses a service account — a robot Google identity, separate from your
-personal login — because the server needs to write to the sheet with nobody
-around to click "Allow."
-
-1. Go to [console.cloud.google.com](https://console.cloud.google.com), create a project (any name).
-2. In the search bar, find **Google Sheets API** and click Enable.
-3. Go to **IAM & Admin → Service Accounts → Create Service Account**. Any name works. Skip the optional permission steps, click Done.
-4. Click into the service account you just made → **Keys** tab → **Add Key → Create new key → JSON**. This downloads a `.json` file — keep it private, it's a credential.
-5. Open that JSON file, find the `"client_email"` field (looks like `something@your-project.iam.gserviceaccount.com`).
-6. In your budget spreadsheet's first tab, make sure category names are in column C starting at row 6, with their running totals in column D — same layout as the existing sheet.
-7. Click **Share** on that spreadsheet, paste in the service account's email from step 5, give it **Editor** access.
-8. Copy the Sheet ID from the URL — the long string between `/d/` and `/edit`.
-9. On Render: go to your service → **Environment** tab → add two variables:
-   - `GOOGLE_SERVICE_ACCOUNT_JSON` — paste the *entire contents* of the JSON file as the value.
-   - `GOOGLE_SHEET_ID` — paste the ID from step 8.
-10. Render will redeploy automatically. Text something like `supermarket 50` and check the sheet — the Supermarket total should go up within a couple seconds.
-
-Text the **category name** (typos are fine — `supermrket` still matches), not a merchant name — `auchan 50` won't guess it means Supermarket, it'll fall back to `Altele` on purpose rather than risk updating the wrong category.
-
-At the start of a new month: create that month's new budget file, share it with the same service account email (step 7), copy its Sheet ID, and update `GOOGLE_SHEET_ID` on Render to that new ID — the app always points at whichever file that variable names.
-
-If a row doesn't update, check Render's Logs tab — the app prints exactly why (missing env vars, wrong permissions, sheet not shared, etc.) instead of failing silently.
+1. **A visual frontend** — ✅ done; `web/` is the app described above.
+2. **Filtering by category from the pills** — the `All categories` pill navigates, as the design specifies; it doesn't filter the data yet.
+3. **Editing an expense in place** — the transaction sheet offers Close and Delete, per the design. `PUT /api/expenses/{id}` exists and is unused by the app.
+4. **Loading and error states** — the design doesn't cover skeletons or error copy; failures currently surface as a message where one fits.
+5. **Apple sign-in** — the code path is written and unit-tested; it's waiting on a paid Apple Developer account. Google and GitHub are already live.
+6. **Payments** — wire this in before polishing anything else.
 
 ## Importing your monthly budget spreadsheets
 
-`POST /api/import/spreadsheet` (Accounts → Settings → Import spreadsheet in
-the app) backfills a month from an export of the budget sheets described
-above. This is how the app got its 2026 history: eight monthly sheets, Jan
+`POST /api/import/spreadsheet` (Profile → Settings → Import spreadsheet in
+the app) backfills a month from an export of a monthly budget spreadsheet.
+This is how the app got its 2026 history: eight monthly sheets, Jan
 through Aug, each exported as CSV and imported in order.
 
 The source files live in Drive at **My Drive → Documents → [01] Spreadsheets
@@ -423,6 +392,6 @@ next reload.
 
 ## Your move
 
-Log a week of real expenses through the app and the WhatsApp webhook both,
-then look at Budget at the end of it. Whichever number you don't trust is the
+Log a week of real expenses through the app, then look at Budget at the end
+of it. Whichever number you don't trust is the
 next thing to fix.
