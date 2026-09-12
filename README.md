@@ -40,7 +40,11 @@ with anything else.
 | **Analytics** | Spend over time as bars, with that range's transactions below it. Unlike the other tabs it starts with **no** period filter — all time, from the earliest expense to now — and keeps its own period selection, so narrowing Analytics doesn't move Activity or Budget with it. |
 | **Accounts** | Profile, six stat cells from `/api/me/stats`, settings, the accounts you spend from, and log out. |
 
-The floating **+** opens a keypad sheet that logs an expense; tapping a
+The floating **+** opens a keypad sheet that logs an expense, or — with the
+Expense / Income toggle at its top — an income line that adds to the month
+instead of subtracting from it: same keypad, but a name replaces the category
+pills, since income is a named line on a month rather than a categorised
+transaction. Saving one lands on the Income list so it's visible. Tapping a
 transaction opens a sheet with its date, account and category, and a delete.
 
 **Periods.** The period sheet offers Daily / Weekly / Monthly / Yearly /

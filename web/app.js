@@ -117,6 +117,8 @@ const state = {
   searchOpen: false,
   q: "",
   amount: "", // keypad buffer
+  addKind: "Expense", // the + sheet logs a spend or an income line
+  addName: "", // income's own name field, kept here so keypad re-renders don't drop it
   addCatId: null,
   addCurrency: null, // null = the account's own currency; otherwise an ENTRY_CURRENCIES code
   convAmount: "", // the rates page's converter
@@ -1158,16 +1160,37 @@ function addSheet() {
     ? `<div class="keypad-converted">≈ ${esc(fmt(convertWithRates(typed, active, currentCurrency)))}</div>`
     : "";
 
+  const income = state.addKind === "Income";
+
+  // Income is a named line on a month, not a categorised transaction: no
+  // category, no account, and the backend stores it in the user's own
+  // currency - so the pills and the currency chips give way to a name field.
+  const kindToggle = `
+    <div class="segmented" style="margin-bottom:14px">
+      ${["Expense", "Income"].map((kind) => `
+        <button type="button" class="${kind === state.addKind ? "is-selected" : ""}"
+          data-action="set-add-kind" data-value="${kind}">${esc(t(kind.toLowerCase()))}</button>`).join("")}
+    </div>`;
+
+  const body = income
+    ? `<label class="field"><span>${esc(t("name"))}</span>
+         <input id="income-keypad-name" type="text" value="${esc(state.addName)}" />
+       </label>`
+    : `${converted}
+       <div class="cur-chip-row">${currencyChips}</div>
+       <div class="cat-pill-row">${pills || `<span class="note">${esc(t("noCategoriesYet"))}</span>`}</div>`;
+
   return sheetShell(`
-    <div class="sheet-caption">${esc(t("enterAmount"))}</div>
-    <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(withCurrencyIn(state.amount || "0", active))}</div>
-    ${converted}
-    <div class="cur-chip-row">${currencyChips}</div>
-    <div class="cat-pill-row">${pills || `<span class="note">${esc(t("noCategoriesYet"))}</span>`}</div>
+    ${kindToggle}
+    <div class="sheet-caption">${esc(t(income ? "enterIncomeAmount" : "enterAmount"))}</div>
+    <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(income
+      ? `+${withCurrencyIn(state.amount || "0", currentCurrency)}`
+      : withCurrencyIn(state.amount || "0", active))}</div>
+    ${body}
     <div class="keypad">${keys}</div>
     <div class="sheet-btn-row" style="margin-top:0">
       <button class="btn-secondary" data-action="close-sheet">${esc(t("cancel"))}</button>
-      <button class="btn-primary" data-action="save-expense">${esc(t("done"))}</button>
+      <button class="btn-primary" data-action="save-add">${esc(t("done"))}</button>
     </div>
     <p class="error">${esc(state.error)}</p>`, { add: true, persistent: true });
 }
@@ -1748,6 +1771,7 @@ const ACTIONS = {
   "open-add": () => {
     state.sheet = "add";
     state.amount = "";
+    state.addName = "";
     state.error = "";
     if (state.addCatId == null) {
       const first = decoratedCategories()[0];
@@ -1756,6 +1780,36 @@ const ACTIONS = {
   },
   key: (el) => pressKey(el.dataset.value),
   "set-add-category": (el) => { state.addCatId = Number(el.dataset.id); },
+  "set-add-kind": (el) => { state.addKind = el.dataset.value; state.error = ""; },
+  // One button, two shapes - which one the keypad is in decides where the
+  // typed amount goes.
+  "save-add": async () => (state.addKind === "Income" ? ACTIONS["save-income"]() : ACTIONS["save-expense"]()),
+  "save-income": async () => {
+    const amount = parseFloat(state.amount);
+    if (!amount) {
+      state.sheet = null;
+      return;
+    }
+    const name = state.addName.trim();
+    if (!name) {
+      state.error = t("nameAndAmountRequired");
+      return;
+    }
+    await apiFetch("/api/income", {
+      method: "POST",
+      // Month-keyed like every other income row, on the month being entered -
+      // today's, since that is the day the keypad logs against.
+      body: JSON.stringify({ name, amount, period: periodOf(new Date()) }),
+    });
+    state.sheet = null;
+    state.amount = "";
+    state.addName = "";
+    // Land on the Income list, so the line that was just added is visible
+    // rather than filed away somewhere the user has to go looking for.
+    state.kind = "Income";
+    state.view = "activity";
+    return refresh({ identity: true });
+  },
   "save-expense": async () => {
     const amount = parseFloat(state.amount);
     if (!amount) {
@@ -2026,6 +2080,13 @@ document.addEventListener("input", (event) => {
   if (event.target.id === "search-input") {
     state.q = event.target.value;
     render();
+    return;
+  }
+
+  // Written straight to state with no re-render: every keypad tap rebuilds the
+  // sheet, and the name has to survive that without losing the caret.
+  if (event.target.id === "income-keypad-name") {
+    state.addName = event.target.value;
     return;
   }
 
