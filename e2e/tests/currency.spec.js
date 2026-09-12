@@ -74,7 +74,7 @@ test("a euro expense is stored in lei and counted in the month's total", async (
   await page.locator('.cur-chip[data-value="EUR"]').click();
 
   const previewed = Number((await page.locator(".keypad-converted").innerText()).replace(/[^\d.]/g, ""));
-  await page.locator('[data-action="save-expense"]').click();
+  await page.locator('[data-action="save-add"]').click();
   await expect(page.locator(".sheet")).toHaveCount(0);
 
   // The row keeps both numbers: lei in the column that adds up, euro underneath.
@@ -99,7 +99,7 @@ test("the transaction sheet explains the conversion it made", async ({ page }) =
   await page.locator('[data-action="open-add"]').click();
   await typeAmount(page, "50");
   await page.locator('.cur-chip[data-value="USD"]').click();
-  await page.locator('[data-action="save-expense"]').click();
+  await page.locator('[data-action="save-add"]').click();
 
   await page.locator(".tx-row").first().click();
   const sheet = page.locator(".sheet");
