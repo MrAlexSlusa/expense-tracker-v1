@@ -13,11 +13,21 @@ name: Keep the backend awake
 # So the pinging happens *inside* one long-running job instead. GitHub's cron
 # only has to deliver a trigger every few hours, which is the one thing it is
 # reliable at, and the loop supplies the fine-grained interval itself.
+#
+# It only pings during the day (WINDOW_START_HOUR..WINDOW_END_HOUR, Bucharest
+# time). Render's free tier gives one pool of ~750 instance-hours a month for
+# the whole account, and a service pinged around the clock burns ~730 of them
+# on its own. Two such services blow the pool and Render suspends both, so each
+# one only stays warm for ~12h a day. Outside the window the service is allowed
+# to sleep; the first visitor of the morning pays one cold start.
 on:
   schedule:
-    # Hourly, but the concurrency group below means most of these do nothing
-    # except queue up as the successor to the job that is already running.
-    - cron: "0 * * * *"
+    # Hourly across the window. This is UTC, so it is wide enough to cover
+    # 08:00-20:00 Bucharest in both summer (UTC+3) and winter (UTC+2) time; the
+    # script below does the exact check in local time, DST included. The
+    # concurrency group means most of these just queue up as the successor to
+    # the job that is already running.
+    - cron: "0 5-18 * * *"
   workflow_dispatch:
 
 # Exactly one pinger alive at a time. Unlike the old one-shot version this must
@@ -47,10 +57,27 @@ jobs:
           # 5h30m, leaving room under the 6 hour job cap for the final ping to
           # finish and the successor run to pick up.
           DURATION_SECONDS: 19800
+          # Ping only from START (inclusive) to END (exclusive), local hours.
+          WINDOW_TZ: Europe/Bucharest
+          WINDOW_START_HOUR: 8
+          WINDOW_END_HOUR: 20
         run: |
           set -uo pipefail
 
-          deadline=$(( SECONDS + DURATION_SECONDS ))
+          # Outside the window there is nothing to do. Exit green so a run that
+          # was queued behind the previous pinger does not email a "failure".
+          hour=$(TZ="$WINDOW_TZ" date +%H)
+          hour=$(( 10#$hour ))
+          if [ "$hour" -lt "$WINDOW_START_HOUR" ] || [ "$hour" -ge "$WINDOW_END_HOUR" ]; then
+            echo "It is ${hour}h in $WINDOW_TZ, outside ${WINDOW_START_HOUR}h-${WINDOW_END_HOUR}h. Letting the service sleep."
+            exit 0
+          fi
+
+          # Run until the end of the window, or the 5h30m cap if that is sooner.
+          # The next queued run takes over from there and re-checks the window.
+          window_left=$(( $(TZ="$WINDOW_TZ" date -d "today ${WINDOW_END_HOUR}:00" +%s) - $(date +%s) ))
+          run_for=$(( window_left < DURATION_SECONDS ? window_left : DURATION_SECONDS ))
+          deadline=$(( SECONDS + run_for ))
           pings=0
           failures=0
           consecutive=0
