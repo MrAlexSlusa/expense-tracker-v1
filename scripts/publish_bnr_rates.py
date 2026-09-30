@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """
-Commits and pushes whatever new rate files are sitting in cursuri_bnr/.
+Copies the rate files the scheduled automation drops into its own folder
+(curs_bnr, next to this repo's folder on the desktop) into the repo's
+cursuri_bnr/, then commits and pushes them.
 
-The scheduled automation writes a spreadsheet there every Monday, but writing
-it only updates this machine. The deployed backend reads the folder as it
-exists in the repository, so until the file is pushed the server keeps falling
-back to fetching BNR directly. This is the step that closes that gap - run it
-right after the automation writes the file:
+The automation writes a spreadsheet to that folder every Monday, but writing
+it only updates this machine. The deployed backend reads cursuri_bnr/ as it
+exists in the repository, so until the file is copied in and pushed the server
+keeps falling back to fetching BNR directly. This is the step that closes that
+gap - run it right after the automation writes the file:
 
     python scripts/publish_bnr_rates.py
+
+The source folder can be changed with --source or the BNR_SOURCE_DIR
+environment variable. If it does not exist the copy step is skipped and
+whatever is already in cursuri_bnr/ is published as before.
 
 Deliberately narrow. It stages cursuri_bnr/ and nothing else, so it is safe to
 run with unrelated work in progress: whatever else is in the working tree stays
@@ -18,12 +24,19 @@ same banking day twice.
 """
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 RATES_SUBDIR = "cursuri_bnr"
+
+# Where the automation leaves the files it produces. Outside the repo on
+# purpose: the automation should not need to know about git.
+DEFAULT_SOURCE = Path(os.environ.get("BNR_SOURCE_DIR") or Path.home() / "Desktop" / "claude" / "curs_bnr")
+RATE_FILE_SUFFIXES = (".xlsx", ".xlsm", ".json")
 
 
 def git(*args) -> subprocess.CompletedProcess:
@@ -38,8 +51,41 @@ def fail(message: str) -> int:
     return 1
 
 
+def import_from_source(source: Path) -> list[str]:
+    """
+    Copies new or changed rate files from the automation's folder into the
+    repo's cursuri_bnr/. Returns the names that were copied.
+
+    Files are only ever copied in, never deleted from either side, and Excel's
+    `~$` lock files (a sheet someone has open) are ignored.
+    """
+    if not source.is_dir():
+        print(f"{source} does not exist - skipping the copy step")
+        return []
+
+    target = REPO / RATES_SUBDIR
+    target.mkdir(parents=True, exist_ok=True)
+
+    copied = []
+    for path in sorted(source.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in RATE_FILE_SUFFIXES or path.name.startswith("~$"):
+            continue
+        destination = target / path.name
+        if destination.is_file() and destination.read_bytes() == path.read_bytes():
+            continue
+        shutil.copy2(path, destination)
+        copied.append(path.name)
+    return copied
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Commit and push new BNR rate files")
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=DEFAULT_SOURCE,
+        help=f"Folder the automation writes rate files to (default: {DEFAULT_SOURCE})",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be committed, then stop")
     parser.add_argument(
         "--no-pull",
@@ -57,6 +103,12 @@ def main() -> int:
     identity = git("config", "user.email").stdout.strip()
     if not identity:
         return fail("git user.email is not set - configure it before committing")
+
+    copied = import_from_source(args.source)
+    if copied:
+        print(f"Copied {len(copied)} file(s) from {args.source}:")
+        for name in copied:
+            print(f"  {name}")
 
     if git("add", "--", RATES_SUBDIR).returncode != 0:
         return fail(f"Could not stage {RATES_SUBDIR}/")
