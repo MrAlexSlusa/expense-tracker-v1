@@ -235,7 +235,11 @@ def test_excel_lock_files_are_ignored(tmp_path):
 
 def test_expenses_convert_from_the_spreadsheet(tmp_path, monkeypatch):
     monkeypatch.setattr(bnr, "RATES_DIR", tmp_path)
-    write_sheet(tmp_path / f"Curs BNR {date.today().strftime('%d.%m.%Y')}.xlsx", SHEET_ROWS)
+    # Dated today on purpose: SHEET_ROWS carries a fixed date, which ages past
+    # MAX_SNAPSHOT_AGE_DAYS and would send this test to the (forbidden) network.
+    today = date.today().strftime("%d.%m.%Y")
+    rows = [(currency, rate, today) for currency, rate, _ in SHEET_ROWS]
+    write_sheet(tmp_path / f"Curs BNR {today}.xlsx", rows)
     monkeypatch.setattr(bnr, "_http_get", lambda url: pytest.fail(f"unexpected network call to {url}"))
 
     token = _signup("sheet@example.com")
