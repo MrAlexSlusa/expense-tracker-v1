@@ -6,6 +6,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      # Render otherwise builds with its newest Python, so a deploy can change
+      # interpreter without any commit. Bump this on purpose, not by accident.
+      - key: PYTHON_VERSION
+        value: 3.14.3
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET_KEY
