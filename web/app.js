@@ -449,10 +449,13 @@ async function apiFetch(path, options = {}) {
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
   let res;
+  beginRequest();
   try {
     res = await fetchWithWakeupRetry(window.API_BASE_URL + path, { ...options, headers });
   } catch {
     throw new Error(t("errServerWakingUp"));
+  } finally {
+    endRequest();
   }
   if (res.status === 401 && token && !credentialCheck) {
     // Only an authenticated request's 401 means the session is dead - public
@@ -467,6 +470,230 @@ async function apiFetch(path, options = {}) {
     throw new Error(body.detail ? translateError(body.detail) : t("errGeneric"));
   }
   return res.status === 204 ? null : res.json();
+}
+
+// --- feel: progress, toasts, sound, haptics ------------------------------
+// The backend can take seconds to answer (longer after a cold start), and a
+// screen that sits frozen for that long reads as a crash. So every request
+// lights a thin bar at the top, a slow one says why it is slow, and anything
+// you do is acknowledged the moment you do it - with a sound and a buzz where
+// the device has them - rather than when the server gets round to it.
+
+let inflightRequests = 0;
+let progressShowTimer = null;
+let slowRequestTimer = null;
+let slowToastShown = false;
+
+function progressEl() {
+  return document.getElementById("progress");
+}
+
+function beginRequest() {
+  inflightRequests++;
+  if (inflightRequests !== 1) return;
+  clearTimeout(progressShowTimer);
+  clearTimeout(slowRequestTimer);
+  // A request that answers within a frame or two never shows the bar at all:
+  // flashing it for every quick call would be noise, not information.
+  progressShowTimer = setTimeout(() => {
+    const bar = progressEl();
+    if (bar) { bar.classList.remove("is-done"); bar.classList.add("is-active"); }
+  }, 140);
+  slowRequestTimer = setTimeout(() => {
+    slowToastShown = true;
+    toast(t("serverWaking"), "loading", 0);
+  }, 4500);
+}
+
+function endRequest() {
+  inflightRequests = Math.max(0, inflightRequests - 1);
+  if (inflightRequests) return;
+  clearTimeout(progressShowTimer);
+  clearTimeout(slowRequestTimer);
+  const bar = progressEl();
+  if (bar && bar.classList.contains("is-active")) {
+    bar.classList.remove("is-active");
+    bar.classList.add("is-done");
+  }
+  if (slowToastShown) {
+    slowToastShown = false;
+    hideToast();
+  }
+}
+
+let toastTimer = null;
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  const el = document.querySelector("#toast-root .toast");
+  if (!el) return;
+  el.classList.remove("is-shown");
+  setTimeout(() => { if (!el.classList.contains("is-shown")) el.remove(); }, 320);
+}
+
+// One toast at a time: a newer message replaces the text in place instead of
+// stacking, so "Saving..." turns into "Saved" rather than a second pill.
+// kind is loading | success | error | info; ms = 0 keeps it up until replaced.
+function toast(text, kind = "info", ms = 2200) {
+  const root = document.getElementById("toast-root");
+  if (!root) return;
+  clearTimeout(toastTimer);
+  let el = root.querySelector(".toast");
+  const fresh = !el;
+  if (fresh) {
+    el = document.createElement("div");
+    el.className = "toast";
+    root.appendChild(el);
+  }
+  el.dataset.kind = kind;
+  el.innerHTML = `<span class="toast-icon"></span><span class="toast-text">${esc(text)}</span>`;
+  if (fresh) el.getBoundingClientRect(); // commit the hidden state so the entrance animates
+  el.classList.add("is-shown");
+  if (!fresh) {
+    el.classList.remove("is-bump");
+    void el.offsetWidth;
+    el.classList.add("is-bump");
+  }
+  if (ms > 0) toastTimer = setTimeout(hideToast, ms);
+}
+
+// Sounds are synthesised rather than shipped as files: a few short tones cost
+// nothing to load, work offline, and can't lag behind the tap they answer.
+let audioCtx = null;
+let lastFeedbackAt = 0;
+
+function audio() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function tone(ctx, { freq, to, start = 0, dur = 0.08, type = "sine", gain = 0.05 }) {
+  const t0 = ctx.currentTime + start;
+  const osc = ctx.createOscillator();
+  const amp = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  if (to) osc.frequency.exponentialRampToValueAtTime(to, t0 + dur);
+  amp.gain.setValueAtTime(0.0001, t0);
+  amp.gain.exponentialRampToValueAtTime(gain, t0 + 0.008);
+  amp.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(amp).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.03);
+}
+
+const SOUNDS = {
+  tap: [{ freq: 1700, to: 1100, dur: 0.035, type: "triangle", gain: 0.03 }],
+  open: [{ freq: 440, to: 660, dur: 0.12, gain: 0.035 }],
+  close: [{ freq: 620, to: 400, dur: 0.1, gain: 0.025 }],
+  send: [{ freq: 520, to: 980, dur: 0.13, type: "triangle", gain: 0.045 }],
+  success: [{ freq: 880, dur: 0.11, gain: 0.045 }, { freq: 1318, start: 0.085, dur: 0.24, gain: 0.045 }],
+  delete: [{ freq: 360, to: 130, dur: 0.2, type: "triangle", gain: 0.06 }],
+  error: [{ freq: 240, dur: 0.11, type: "square", gain: 0.022 }, { freq: 190, start: 0.13, dur: 0.17, type: "square", gain: 0.022 }],
+};
+const HAPTICS = { tap: 5, send: 12, success: [10, 50, 16], delete: 22, error: [30, 60, 30] };
+
+function soundOn() {
+  return settings.sound !== false;
+}
+
+function feedback(name) {
+  lastFeedbackAt = Date.now();
+  if (!soundOn()) return;
+  try {
+    const ctx = audio();
+    if (ctx) SOUNDS[name].forEach((note) => tone(ctx, note));
+  } catch { /* no audio on this device - the visuals still carry it */ }
+  // Chrome refuses (and logs an error for) vibrate before the first real tap.
+  const activated = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+  try {
+    if (navigator.vibrate && HAPTICS[name] && activated) navigator.vibrate(HAPTICS[name]);
+  } catch { /* ditto */ }
+}
+
+function reducedMotion() {
+  return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+// Totals count from their old value to the new one instead of snapping, so a
+// change reads as the number adapting rather than the screen being replaced.
+// Keyed by data-count-key, which is how a hero's value carries across
+// re-renders and even across tabs.
+const countShown = new Map();
+
+function animateCounts(root) {
+  root.querySelectorAll("[data-count]").forEach((el) => {
+    const key = el.dataset.countKey || "count";
+    const to = Number(el.dataset.count);
+    const from = countShown.get(key);
+    countShown.set(key, to);
+    if (from == null || Math.abs(from - to) < 0.005 || reducedMotion()) return;
+    const started = performance.now();
+    const duration = 560;
+    el.textContent = fmt(from);
+    const step = (now) => {
+      if (!el.isConnected) return;
+      const p = Math.min((now - started) / duration, 1);
+      const eased = 1 - Math.pow(1 - p, 4);
+      const value = from + (to - from) * eased;
+      countShown.set(key, value);
+      el.textContent = fmt(value);
+      if (p < 1) requestAnimationFrame(step);
+      else countShown.set(key, to);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+// Bars and progress fills are rebuilt by every render, which would make them
+// jump. Each carries data-morph="key"; the old size is put back for one frame
+// and the CSS transition carries it to the new one. Arriving on a screen they
+// grow from zero instead.
+function captureMorphs(root) {
+  const sizes = new Map();
+  root.querySelectorAll("[data-morph]").forEach((el) => {
+    sizes.set(el.dataset.morph, el.style.height || el.style.width);
+  });
+  return sizes;
+}
+
+function playMorphs(root, before, entering) {
+  if (reducedMotion()) return;
+  const moved = [];
+  root.querySelectorAll("[data-morph]").forEach((el) => {
+    const prop = el.style.height ? "height" : "width";
+    const target = el.style[prop];
+    const from = entering ? "0%" : before.get(el.dataset.morph);
+    if (from == null || from === target) return;
+    el.style.transition = "none";
+    el.style[prop] = from;
+    moved.push([el, prop, target]);
+  });
+  if (!moved.length) return;
+  void root.offsetHeight;
+  moved.forEach(([el, prop, target]) => {
+    el.style.transition = "";
+    el.style[prop] = target;
+  });
+}
+
+// The first paint after login, while the data is still on its way: the
+// screen's real outline, shimmering, instead of a blank page.
+function skeletonView() {
+  const row = '<div class="sk sk-row"><i class="sk-tile"></i><i class="sk-line"></i><i class="sk-amt"></i></div>';
+  return `
+    <div class="view view-enter skeleton">
+      <div class="hero"><i class="sk sk-pill"></i><i class="sk sk-hero"></i><i class="sk sk-delta"></i></div>
+      <i class="sk sk-chart"></i>
+      <div class="sk-pills"><i class="sk sk-chip"></i><i class="sk sk-chip"></i><i class="sk sk-chip"></i></div>
+      <i class="sk sk-day"></i>
+      ${row.repeat(5)}
+    </div>`;
 }
 
 // --- local settings (theme + language) -----------------------------------
@@ -666,7 +893,7 @@ function chartBlock(series, opts) {
   const format = opts.k ? fmtK : (n) => Math.round(n).toLocaleString(localeForLang());
 
   const bars = series.buckets
-    .map((b) => `<div class="chart-bar" style="height:${((b.value / scaleMax) * 100).toFixed(1)}%"></div>`)
+    .map((b, i) => `<div class="chart-bar" data-morph="bar-${i}" style="height:${((b.value / scaleMax) * 100).toFixed(1)}%"></div>`)
     .join("");
   const labels = axisLabels(series.buckets).map((l) => `<span>${esc(l)}</span>`).join("");
 
@@ -769,9 +996,13 @@ function txRowHtml(row) {
   const paid = e.original_currency
     ? `<span class="tx-sub">${esc(t("paidIn", { amount: fmtIn(e.original_amount, e.original_currency) }))}</span>`
     : "";
-  return `<button class="tx-row ${row.radius} ${row.divider ? "has-divider" : ""}" data-action="open-tx" data-id="${e.id}">
+  // A row the server hasn't confirmed yet is drawn straight away but can't be
+  // opened - there is no id to open it by until the save comes back.
+  const classes = [row.radius, row.divider ? "has-divider" : "", e.pending ? "is-pending" : "", e.id === enteringRowId ? "tx-enter" : ""];
+  return `<button class="tx-row ${classes.join(" ")}" data-action="${e.pending ? "" : "open-tx"}" data-id="${e.id}">
       <span class="tile">${esc(emoji)}</span>
       <span class="tx-name">${esc(e.note || (e.category_name || t("expense")))}${paid}</span>
+      ${e.pending ? '<span class="mini-spinner" aria-hidden="true"></span>' : ""}
       <span class="tx-amount">${esc(fmt(e.amount))}</span>
     </button>`;
 }
@@ -817,7 +1048,7 @@ function activityView() {
     <div class="view">
       <div class="hero">
         <button class="hero-period-btn" data-action="open-period">${esc(rangeLabel(state.period, currentRange()))} ⌄</button>
-        <div class="hero-amount">${esc(fmt(total))}</div>
+        <div class="hero-amount" data-count="${total}" data-count-key="hero">${esc(fmt(total))}</div>
         ${state.kind === "Income" ? "" : deltaHtml()}
       </div>
       ${state.kind === "Income" ? "" : chartBlock(spendSeries(), { roundScale: false })}
@@ -855,7 +1086,7 @@ function summaryView() {
         ${donutHtml(null)}
         <div class="donut-center">
           <button class="hero-period-btn" data-action="open-period">${esc(rangeLabel(state.period, currentRange()))} ⌄</button>
-          <div class="hero-amount-sm">${esc(fmt(total))}</div>
+          <div class="hero-amount-sm" data-count="${total}" data-count-key="hero-sm">${esc(fmt(total))}</div>
           ${deltaHtml("delta-sm")}
         </div>
       </div>
@@ -887,7 +1118,7 @@ function detailView() {
         ${donutHtml(category.id)}
         <div class="donut-center">
           <div style="color:var(--text-muted);font-size:15px">${esc(category.name)}</div>
-          <div class="hero-amount-sm">${esc(fmt(category.total))}</div>
+          <div class="hero-amount-sm" data-count="${category.total}" data-count-key="hero-sm">${esc(fmt(category.total))}</div>
           ${category.target ? `<div class="hero-caption">${esc(t("ofTarget", { target: fmt(category.target) }))}</div>` : ""}
         </div>
       </div>
@@ -916,7 +1147,7 @@ function budgetView() {
           <span>${esc(t(tag.toLowerCase()))}</span>
           <span>${esc(t("ofTargetPct", { actual: Math.round(goal.actual_pct), target: Math.round(goal.target_pct) }))}</span>
         </div>
-        <div class="track"><i style="width:${Math.min(goal.actual_pct, 100).toFixed(1)}%;background:${GOAL_COLORS[tag]}"></i></div>
+        <div class="track"><i data-morph="goal-${tag}" style="width:${Math.min(goal.actual_pct, 100).toFixed(1)}%;background:${GOAL_COLORS[tag]}"></i></div>
       </div>`;
   }).join("");
 
@@ -931,7 +1162,7 @@ function budgetView() {
           <span class="budget-row-name">${esc(c.name)}</span>
           <span class="budget-row-nums">${esc(fmt(c.total))} / ${esc(target ? fmt(target) : t("noLimit"))}</span>
         </div>
-        <div class="track track-sm"><i style="width:${width.toFixed(1)}%;background:${over ? OVER_BUDGET_COLOR : c.color}"></i></div>
+        <div class="track track-sm"><i data-morph="cat-${c.id}" style="width:${width.toFixed(1)}%;background:${over ? OVER_BUDGET_COLOR : c.color}"></i></div>
       </div>`;
   }).join("");
 
@@ -939,7 +1170,7 @@ function budgetView() {
     <div class="view budget-view">
       <div class="budget-hero">
         <button class="hero-period-btn" data-action="open-period">${esc(rangeLabel(state.period, range))} ⌄</button>
-        <div class="hero-amount-sm">${esc(fmt(total))}</div>
+        <div class="hero-amount-sm" data-count="${total}" data-count-key="hero-sm">${esc(fmt(total))}</div>
         <div class="hero-caption">${esc(t("plannedAndDay", { planned: fmt(planned), day: elapsed, days: span }))}</div>
       </div>
 
@@ -1092,7 +1323,7 @@ function analyticsView() {
     <div class="view">
       <div class="hero">
         <div style="color:var(--text-muted);font-size:15px">${esc(t("spentIn", { period: label.toLowerCase() }))}</div>
-        <div class="hero-amount-sm">${esc(fmt(total))}</div>
+        <div class="hero-amount-sm" data-count="${total}" data-count-key="hero-sm">${esc(fmt(total))}</div>
       </div>
       <div class="pill-row">
         <button class="pill" data-action="open-period">${esc(label)}</button>
@@ -1135,6 +1366,7 @@ function profileView() {
     ["open-language", t("language"), langName],
     ["open-timezone", t("timeZone"), me.timezone || t("timeZoneUtc")],
     ["open-theme", t("theme"), t(settings.theme)],
+    ["toggle-sound", t("soundsHaptics"), t(soundOn() ? "on" : "off")],
     ["open-twofactor", t("twoFactor"), t(me.two_factor_enabled ? "on" : "off")],
     ["open-categories", t("categories"), String(data.categories.length)],
     ["open-income", t("income"), periodOf(currentRange().start)],
@@ -1687,17 +1919,38 @@ function renderTabs() {
 let renderedSheet = null;
 let renderedView = null;
 let renderedSearchOpen = false;
+let enteringRowId = null; // the row that slides in on the next render, then never again
+
+// A closing sheet used to vanish in one frame. Its last frame is kept as an
+// inert ghost that slides down and fades while the screen behind is already live.
+function dismissSheetGhost(sheetRoot) {
+  const old = sheetRoot.firstElementChild;
+  if (!old || reducedMotion()) return;
+  old.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+  old.querySelectorAll("[data-action]").forEach((n) => n.removeAttribute("data-action"));
+  old.removeAttribute("data-action");
+  old.classList.remove("no-anim");
+  old.querySelectorAll(".no-anim").forEach((n) => n.classList.remove("no-anim"));
+  old.classList.add("is-leaving");
+  document.body.appendChild(old);
+  setTimeout(() => old.remove(), 340);
+}
 
 function render() {
   const root = document.getElementById("view-root");
+  const entering = state.view !== renderedView;
+  const morphs = captureMorphs(root);
   root.innerHTML = (VIEWS[state.view] || activityView)();
   // The fade-and-rise belongs to arriving on a screen. Replaying it on every
   // state change - a filter, a deleted row, a keystroke - is what made the app
   // feel like it was permanently re-entering itself.
-  if (state.view !== renderedView) {
+  if (entering) {
     root.querySelector(".view")?.classList.add("view-enter");
     renderedView = state.view;
   }
+  playMorphs(root, morphs, entering);
+  animateCounts(root);
+  enteringRowId = null;
   renderTabs();
 
   // A re-render while the same sheet stays open (picking a category, switching
@@ -1705,6 +1958,13 @@ function render() {
   const sheetRoot = document.getElementById("sheet-root");
   const staying = state.sheet && state.sheet === renderedSheet;
   const scrollTop = staying ? (sheetRoot.querySelector(".sheet")?.scrollTop || 0) : 0;
+  if (!state.sheet && renderedSheet) {
+    dismissSheetGhost(sheetRoot);
+    // A save or delete already made its own sound; closing on top of it is clutter.
+    if (Date.now() - lastFeedbackAt > 200) feedback("close");
+  } else if (state.sheet && !renderedSheet) {
+    feedback("open");
+  }
   sheetRoot.innerHTML = state.sheet && SHEETS[state.sheet] ? SHEETS[state.sheet]() : "";
   renderedSheet = state.sheet;
   if (staying) {
@@ -1804,7 +2064,13 @@ async function loadAnalytics() {
   data.analyticsBuckets = seriesFor({ start, end: range.end }, expenses);
 }
 
-async function refresh({ identity = false, analytics = false } = {}) {
+// While a refetch is out, what's on screen may be about to change - it fades
+// back a little so that reads as "updating" rather than as the answer. quiet
+// skips that for refreshes behind an optimistic update, where the screen is
+// already showing the result.
+async function refresh({ identity = false, analytics = false, quiet = false } = {}) {
+  const root = document.getElementById("view-root");
+  const staleTimer = quiet ? null : setTimeout(() => root?.classList.add("is-stale"), 180);
   try {
     const jobs = [loadRange()];
     if (identity) jobs.push(loadIdentity());
@@ -1813,8 +2079,83 @@ async function refresh({ identity = false, analytics = false } = {}) {
     state.error = "";
   } catch (err) {
     state.error = err.message;
+    feedback("error");
   }
+  clearTimeout(staleTimer);
+  root?.classList.remove("is-stale");
   render();
+}
+
+// --- optimistic updates --------------------------------------------------
+// Saving used to wait for the POST and then five refetches before anything on
+// screen moved - seconds of a frozen sheet. Now the change is applied to the
+// loaded data at once (row, totals, category bars all follow from it), the
+// server is asked in the background, and a failure puts everything back.
+
+function applyExpenseLocally(body, editingId) {
+  const before = { expenses: data.expenses, categories: data.categories };
+  const old = editingId != null ? data.expenses.find((e) => e.id === editingId) : null;
+  const category = data.categories.find((c) => c.id === body.category_id);
+  const own = !body.currency || body.currency === currentCurrency;
+  const converted = own ? body.amount : ratesReady() ? convertWithRates(body.amount, body.currency, currentCurrency) : null;
+  const amount = converted == null ? body.amount : converted;
+
+  const range = currentRange();
+  const day = parseDate(body.date);
+  const inRange = day >= range.start && day <= range.end;
+
+  const row = {
+    ...(old || {}),
+    id: old ? old.id : `pending-${Date.now()}`,
+    amount,
+    category_id: body.category_id,
+    category_name: category ? category.name : (old && old.category_name) || "",
+    date: body.date,
+    original_amount: own ? null : body.amount,
+    original_currency: own ? null : body.currency,
+    pending: true,
+  };
+
+  const rest = data.expenses.filter((e) => e !== old);
+  data.expenses = inRange ? [row, ...rest] : rest;
+  data.categories = data.categories.map((c) => {
+    let total = c.total;
+    if (old && old.category_id === c.id) total -= old.amount;
+    if (inRange && c.id === body.category_id) total += amount;
+    return total === c.total ? c : { ...c, total };
+  });
+  if (!old) enteringRowId = row.id;
+
+  return {
+    row,
+    undo() { data.expenses = before.expenses; data.categories = before.categories; },
+  };
+}
+
+function removeExpenseLocally(id) {
+  const before = { expenses: data.expenses, categories: data.categories };
+  const gone = data.expenses.find((e) => e.id === id);
+  data.expenses = data.expenses.filter((e) => e.id !== id);
+  if (gone) {
+    data.categories = data.categories.map((c) => (c.id === gone.category_id ? { ...c, total: c.total - gone.amount } : c));
+  }
+  return () => { data.expenses = before.expenses; data.categories = before.categories; };
+}
+
+// Lets the sheet slide away first, then folds the row shut, so the eye can
+// follow what disappeared instead of the list just being one row shorter.
+function collapseRow(id) {
+  return new Promise((resolve) => {
+    if (reducedMotion()) { resolve(); return; }
+    setTimeout(() => {
+      const row = document.querySelector(`.tx-row[data-id="${id}"]`);
+      if (!row) { resolve(); return; }
+      row.style.height = `${row.offsetHeight}px`;
+      void row.offsetHeight;
+      row.classList.add("is-removing");
+      setTimeout(resolve, 280);
+    }, 170);
+  });
 }
 
 // --- actions -------------------------------------------------------------
@@ -1901,6 +2242,7 @@ async function saveTimeZone(zone) {
 
 const ACTIONS = {
   "set-view": (el) => {
+    if (state.view !== el.dataset.value) feedback("tap");
     state.view = el.dataset.value;
     if (state.view === "summary") state.selCat = null;
     if (state.view === "analytics" && !data.analyticsBuckets) return refresh();
@@ -1945,10 +2287,11 @@ const ACTIONS = {
     }
   },
   key: (el) => {
+    feedback("tap");
     pressKey(el.dataset.value);
     return patchAddSheet() ? "no-render" : undefined;
   },
-  "set-add-category": (el) => { state.addCatId = Number(el.dataset.id); },
+  "set-add-category": (el) => { feedback("tap"); state.addCatId = Number(el.dataset.id); },
   // The date field is read straight from the DOM rather than mirrored into
   // state on every keystroke: a native date input owns its own editing.
   "save-expense": async () => {
@@ -1959,6 +2302,7 @@ const ACTIONS = {
       return;
     }
     const dateField = document.getElementById("add-date");
+    const editingId = state.editTxId;
     const body = {
       amount,
       category_id: state.addCatId,
@@ -1967,16 +2311,41 @@ const ACTIONS = {
       // sends exactly what it always did.
       currency: state.addCurrency || undefined,
     };
-    await apiFetch(
-      state.editTxId != null ? `/api/expenses/${state.editTxId}` : "/api/expenses",
-      { method: state.editTxId != null ? "PUT" : "POST", body: JSON.stringify(body) },
-    );
+    // Kept so a failed save can reopen the sheet exactly as it was left.
+    const typed = { amount: state.amount, addCurrency: state.addCurrency, addCatId: state.addCatId, addDate: body.date };
+
+    const local = applyExpenseLocally(body, editingId);
     state.sheet = null;
     state.amount = "";
     state.addCurrency = null;
     state.editTxId = null;
     state.txId = null;
-    return refresh({ identity: true, months: true });
+    state.error = "";
+    feedback("send");
+    render();
+    toast(t(editingId != null ? "updating" : "saving"), "loading", 0);
+
+    let saved;
+    try {
+      saved = await apiFetch(
+        editingId != null ? `/api/expenses/${editingId}` : "/api/expenses",
+        { method: editingId != null ? "PUT" : "POST", body: JSON.stringify(body) },
+      );
+    } catch (err) {
+      local.undo();
+      Object.assign(state, typed, { sheet: "add", editTxId: editingId, error: err.message });
+      feedback("error");
+      toast(err.message, "error", 3500);
+      return undefined;
+    }
+
+    // Confirmed: the row loses its spinner now, not after the refetch below.
+    local.row.pending = false;
+    if (saved && saved.id != null) local.row.id = saved.id;
+    feedback("success");
+    toast(t(editingId != null ? "expenseUpdated" : "expenseSaved"), "success");
+    render();
+    return refresh({ identity: true, quiet: true });
   },
   // Correcting reopens the sheet that logged it, prefilled - so there is one
   // way to say "this much, this category", not two that drift apart.
@@ -1995,10 +2364,26 @@ const ACTIONS = {
   },
   "open-tx": (el) => { state.sheet = "tx"; state.txId = Number(el.dataset.id); },
   "delete-expense": async (el) => {
-    await apiFetch(`/api/expenses/${el.dataset.id}`, { method: "DELETE" });
+    const id = Number(el.dataset.id);
     state.sheet = null;
     state.txId = null;
-    return refresh({ identity: true, months: true });
+    feedback("delete");
+    render();
+    const request = apiFetch(`/api/expenses/${id}`, { method: "DELETE" });
+    request.catch(() => {}); // awaited below, after the row has folded away
+    await collapseRow(id);
+    const undo = removeExpenseLocally(id);
+    render();
+    try {
+      await request;
+    } catch (err) {
+      undo();
+      feedback("error");
+      toast(err.message, "error", 3500);
+      return undefined;
+    }
+    toast(t("expenseDeleted"), "success");
+    return refresh({ identity: true, quiet: true });
   },
   "close-sheet": () => { state.sheet = null; state.error = ""; state.editTxId = null; },
 
@@ -2024,6 +2409,11 @@ const ACTIONS = {
     state.sheet = null;
   },
   "open-theme": () => { state.sheet = "theme"; },
+  "toggle-sound": () => {
+    settings = { ...settings, sound: !soundOn() };
+    saveSettings(settings);
+    if (soundOn()) feedback("success");
+  },
   "set-theme": (el) => {
     settings = { ...settings, theme: el.dataset.value };
     saveSettings(settings);
@@ -2050,6 +2440,7 @@ const ACTIONS = {
     }
   },
   "set-add-currency": async (el) => {
+    feedback("tap");
     const code = el.dataset.value;
     state.addCurrency = code === currentCurrency ? null : code;
     // The preview needs rates the first time a foreign currency is picked.
@@ -2205,15 +2596,47 @@ document.addEventListener("click", async (event) => {
   const action = ACTIONS[el.dataset.action];
   if (!action) return;
   event.preventDefault();
+  // A second tap while the first is still talking to the server would send
+  // the same request twice.
+  if (busyButtons.has(el)) return;
 
+  let busyTimer = null;
   try {
-    const result = await action(el);
+    const pending = action(el);
+    if (pending && typeof pending.then === "function") {
+      busyButtons.add(el);
+      // Only something that is actually slow gets a spinner; one that answers
+      // within a couple of frames would just flicker.
+      busyTimer = setTimeout(() => el.classList.add("is-busy"), 120);
+    }
+    const result = await pending;
     if (result !== "no-render") render();
   } catch (err) {
     state.error = err.message;
+    feedback("error");
     render();
+  } finally {
+    clearTimeout(busyTimer);
+    busyButtons.delete(el);
+    el.classList.remove("is-busy");
   }
 });
+
+const busyButtons = new WeakSet();
+
+// The static forms (login, code, quiz) are not re-rendered from state, so
+// their submit buttons get the same spinner by hand.
+async function withBusy(button, work) {
+  if (!button || button.classList.contains("is-busy")) return undefined;
+  button.classList.add("is-busy");
+  button.disabled = true;
+  try {
+    return await work();
+  } finally {
+    button.classList.remove("is-busy");
+    button.disabled = false;
+  }
+}
 
 document.addEventListener("input", (event) => {
   if (event.target.id === "search-input") {
@@ -2282,7 +2705,11 @@ function showAuthScreen() {
 async function showAppScreen() {
   showOnlyScreen(appScreen);
   state.view = "activity";
-  await refresh({ identity: true });
+  // Paint the outline right away; refresh() swaps the real screen in.
+  renderedView = null;
+  renderTabs();
+  document.getElementById("view-root").innerHTML = skeletonView();
+  await refresh({ identity: true, quiet: true });
 }
 
 async function afterLogin() {
@@ -2314,20 +2741,23 @@ authForm.addEventListener("submit", async (event) => {
   const email = document.getElementById("email").value;
   const password = document.getElementById("password").value;
 
-  try {
-    const body = JSON.stringify({ email, password, lang: settings.lang });
-    const res = await apiFetch(`/api/auth/${mode}`, { method: "POST", body });
-    if (res.requires_otp) {
-      pendingOtpEmail = email;
-      showOnlyScreen(otpScreen);
-      return;
+  await withBusy(authSubmit, async () => {
+    try {
+      const body = JSON.stringify({ email, password, lang: settings.lang });
+      const res = await apiFetch(`/api/auth/${mode}`, { method: "POST", body });
+      if (res.requires_otp) {
+        pendingOtpEmail = email;
+        showOnlyScreen(otpScreen);
+        return;
+      }
+      setToken(res.access_token);
+      rememberEmail(email);
+      await afterLogin();
+    } catch (err) {
+      authError.textContent = err.message;
+      feedback("error");
     }
-    setToken(res.access_token);
-    rememberEmail(email);
-    await afterLogin();
-  } catch (err) {
-    authError.textContent = err.message;
-  }
+  });
 });
 
 // --- social sign-in ------------------------------------------------------
@@ -2415,16 +2845,19 @@ document.getElementById("otp-form").addEventListener("submit", async (event) => 
   event.preventDefault();
   const otpError = document.getElementById("otp-error");
   otpError.textContent = "";
-  try {
-    const res = await apiFetch("/api/auth/verify-otp", {
-      method: "POST",
-      body: JSON.stringify({ email: pendingOtpEmail, code: document.getElementById("otp-code").value }),
-    });
-    setToken(res.access_token);
-    await afterLogin();
-  } catch (err) {
-    otpError.textContent = err.message;
-  }
+  await withBusy(event.target.querySelector("button[type=submit]"), async () => {
+    try {
+      const res = await apiFetch("/api/auth/verify-otp", {
+        method: "POST",
+        body: JSON.stringify({ email: pendingOtpEmail, code: document.getElementById("otp-code").value }),
+      });
+      setToken(res.access_token);
+      await afterLogin();
+    } catch (err) {
+      otpError.textContent = err.message;
+      feedback("error");
+    }
+  });
 });
 
 document.getElementById("otp-back-link").addEventListener("click", showAuthScreen);
@@ -2479,18 +2912,22 @@ function renderQuiz(questions) {
   });
 }
 
-document.getElementById("quiz-submit-btn").addEventListener("click", async () => {
+document.getElementById("quiz-submit-btn").addEventListener("click", async (event) => {
   const quizError = document.getElementById("quiz-error");
   quizError.textContent = "";
-  try {
-    await apiFetch("/api/onboarding/complete", {
-      method: "POST",
-      body: JSON.stringify({ answers: quizAnswers, lang: settings.lang }),
-    });
-    await showAppScreen();
-  } catch (err) {
-    quizError.textContent = err.message;
-  }
+  await withBusy(event.currentTarget, async () => {
+    try {
+      await apiFetch("/api/onboarding/complete", {
+        method: "POST",
+        body: JSON.stringify({ answers: quizAnswers, lang: settings.lang }),
+      });
+      feedback("success");
+      await showAppScreen();
+    } catch (err) {
+      quizError.textContent = err.message;
+      feedback("error");
+    }
+  });
 });
 
 // --- boot ----------------------------------------------------------------
