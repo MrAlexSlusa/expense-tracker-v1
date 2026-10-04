@@ -996,10 +996,11 @@ function txRowHtml(row) {
   const paid = e.original_currency
     ? `<span class="tx-sub">${esc(t("paidIn", { amount: fmtIn(e.original_amount, e.original_currency) }))}</span>`
     : "";
-  // A row the server hasn't confirmed yet is drawn straight away but can't be
-  // opened - there is no id to open it by until the save comes back.
+  // A row the server hasn't confirmed yet is drawn straight away, but has no
+  // real id to open it by - a tap on it is remembered and honoured once the
+  // save comes back.
   const classes = [row.radius, row.divider ? "has-divider" : "", e.pending ? "is-pending" : "", e.id === enteringRowId ? "tx-enter" : ""];
-  return `<button class="tx-row ${classes.join(" ")}" data-action="${e.pending ? "" : "open-tx"}" data-id="${e.id}">
+  return `<button class="tx-row ${classes.join(" ")}" data-action="${e.pending ? "open-pending-tx" : "open-tx"}" data-id="${e.id}">
       <span class="tile">${esc(emoji)}</span>
       <span class="tx-name">${esc(e.note || (e.category_name || t("expense")))}${paid}</span>
       ${e.pending ? '<span class="mini-spinner" aria-hidden="true"></span>' : ""}
@@ -1920,6 +1921,7 @@ let renderedSheet = null;
 let renderedView = null;
 let renderedSearchOpen = false;
 let enteringRowId = null; // the row that slides in on the next render, then never again
+let openWhenSaved = null; // id of a still-saving row that was tapped
 
 // A closing sheet used to vanish in one frame. Its last frame is kept as an
 // inert ghost that slides down and fades while the screen behind is already live.
@@ -1965,6 +1967,9 @@ function render() {
   } else if (state.sheet && !renderedSheet) {
     feedback("open");
   }
+  // A sheet opening while the last one is still sliding away replaces it
+  // outright; two scrims stacked would darken the screen twice.
+  if (state.sheet) document.querySelectorAll("body > .sheet-scrim.is-leaving").forEach((n) => n.remove());
   sheetRoot.innerHTML = state.sheet && SHEETS[state.sheet] ? SHEETS[state.sheet]() : "";
   renderedSheet = state.sheet;
   if (staying) {
@@ -2333,15 +2338,22 @@ const ACTIONS = {
       );
     } catch (err) {
       local.undo();
+      openWhenSaved = null;
       Object.assign(state, typed, { sheet: "add", editTxId: editingId, error: err.message });
       feedback("error");
       toast(err.message, "error", 3500);
       return undefined;
     }
 
-    // Confirmed: the row loses its spinner now, not after the refetch below.
-    local.row.pending = false;
-    if (saved && saved.id != null) local.row.id = saved.id;
+    // Confirmed: the row takes the server's version (real id, the rate it
+    // converted at) and loses its spinner now, not after the refetch below.
+    const tapped = openWhenSaved != null && openWhenSaved === String(local.row.id);
+    openWhenSaved = null;
+    Object.assign(local.row, saved || {}, { pending: false });
+    if (tapped && state.sheet == null) {
+      state.sheet = "tx";
+      state.txId = local.row.id;
+    }
     feedback("success");
     toast(t(editingId != null ? "expenseUpdated" : "expenseSaved"), "success");
     render();
@@ -2363,6 +2375,11 @@ const ACTIONS = {
     state.error = "";
   },
   "open-tx": (el) => { state.sheet = "tx"; state.txId = Number(el.dataset.id); },
+  "open-pending-tx": (el) => {
+    openWhenSaved = el.dataset.id;
+    feedback("tap");
+    return "no-render";
+  },
   "delete-expense": async (el) => {
     const id = Number(el.dataset.id);
     state.sheet = null;
