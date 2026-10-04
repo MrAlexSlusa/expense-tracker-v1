@@ -23,11 +23,11 @@ name: Keep the backend awake
 on:
   schedule:
     # Hourly across the window. This is UTC, so it is wide enough to cover
-    # 08:00-20:00 Bucharest in both summer (UTC+3) and winter (UTC+2) time; the
+    # 10:00-20:00 Bucharest in both summer (UTC+3) and winter (UTC+2) time; the
     # script below does the exact check in local time, DST included. The
     # concurrency group means most of these just queue up as the successor to
     # the job that is already running.
-    - cron: "0 5-18 * * *"
+    - cron: "0 7-18 * * *"
   workflow_dispatch:
 
 # Exactly one pinger alive at a time. Unlike the old one-shot version this must
@@ -59,7 +59,7 @@ jobs:
           DURATION_SECONDS: 19800
           # Ping only from START (inclusive) to END (exclusive), local hours.
           WINDOW_TZ: Europe/Bucharest
-          WINDOW_START_HOUR: 8
+          WINDOW_START_HOUR: 10
           WINDOW_END_HOUR: 20
         run: |
           set -uo pipefail
