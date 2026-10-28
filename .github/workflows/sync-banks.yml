@@ -1,0 +1,46 @@
+name: Sync linked bank accounts
+
+# Pulls new Revolut (and any other linked bank) transactions into the budget
+# without anyone opening the app. The work happens on the backend - this only
+# pokes it on a schedule.
+#
+# Why a workflow and not a Render cron job: cron jobs need a paid Render
+# plan, while this is free and the backend already exposes the one endpoint
+# it needs. scripts/sync_banks.py is the same work as a one-off command if
+# you ever move to a paid plan.
+#
+# Once a day is deliberate. Banks book card payments once a day, and
+# GoCardless caps transaction calls per account per day - a tighter schedule
+# buys nothing and risks the cap.
+
+on:
+  schedule:
+    - cron: "15 5 * * *" # 05:15 UTC, so it has run before anyone looks in the morning
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the backend to sync every linked bank
+        env:
+          API_URL: ${{ vars.API_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$API_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "API_URL variable or CRON_SECRET secret is not set - skipping"
+            exit 0
+          fi
+          # The free Render tier sleeps after ~15 min idle, so the first call
+          # can time out on a cold start. One warm-up ping, then the real call.
+          curl -sS -m 90 "$API_URL/" > /dev/null || true
+          response=$(curl -sS -m 300 -w '\n%{http_code}' -X POST \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            "$API_URL/api/bank/sync-all")
+          body=$(echo "$response" | sed '$d')
+          status=$(echo "$response" | tail -n1)
+          echo "$body"
+          if [ "$status" != "200" ]; then
+            echo "Sync failed with HTTP $status"
+            exit 1
+          fi

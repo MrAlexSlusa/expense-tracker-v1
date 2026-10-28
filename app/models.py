@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -127,3 +127,117 @@ class Expense(Base):
 
     user = relationship("User", back_populates="expenses")
     matched_category = relationship("BudgetCategory", back_populates="expenses")
+
+
+class BankConnection(Base):
+    """
+    One linked bank, via an open-banking aggregator (currently GoCardless
+    Bank Account Data, which is what reaches a personal Revolut account -
+    Revolut's own API is Business-only).
+
+    The aggregator owns the consent: we keep its requisition id so we can
+    re-read the account list, and consent_expires_at so the app can warn
+    before the 90-day PSD2 window runs out instead of just going quiet.
+    """
+    __tablename__ = "bank_connections"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String, nullable=False, default="gocardless")
+    institution_id = Column(String, nullable=False)  # e.g. "REVOLUT_REVOLT21"
+    institution_name = Column(String, nullable=True)
+    requisition_id = Column(String, nullable=False, index=True)
+    agreement_id = Column(String, nullable=True)
+    # Our own opaque handle, echoed back by the bank on the redirect. That
+    # redirect is a bare browser hit with no Authorization header, so this
+    # is the only thing tying it to a user - which is why it is random
+    # rather than the row id.
+    reference = Column(String, nullable=True, index=True)
+    # Where in the frontend to drop the user once the consent is finished.
+    redirect_uri = Column(String, nullable=True)
+    # "pending" until the user comes back from the bank, then "linked";
+    # "expired" once the consent window has closed, "error" if a sync failed.
+    status = Column(String, nullable=False, default="pending")
+    consent_expires_at = Column(DateTime, nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    last_error = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    accounts = relationship("BankAccount", back_populates="connection", cascade="all, delete-orphan")
+
+
+class BankAccount(Base):
+    """
+    One account behind a connection. Revolut exposes a separate account per
+    currency pocket, so a single link usually yields several of these -
+    `enabled` lets the user sync only the ones they actually spend from.
+    """
+    __tablename__ = "bank_accounts"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    connection_id = Column(Integer, ForeignKey("bank_connections.id"), nullable=False)
+    external_id = Column(String, nullable=False, index=True)  # the aggregator's account uuid
+    name = Column(String, nullable=True)
+    iban = Column(String, nullable=True)
+    currency = Column(String, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    connection = relationship("BankConnection", back_populates="accounts")
+
+
+class MerchantRule(Base):
+    """
+    "Anything from this merchant goes in this category" - written the first
+    time the user files a transaction from an unrecognised merchant, and
+    consulted on every sync afterwards. This is what makes the import get
+    quieter over time instead of asking forever.
+
+    `pattern` is the normalised merchant key (see app/categorizer.py), not
+    the raw bank description, so "LIDL 0123 BUCURESTI" and "Lidl Sibiu" hit
+    the same rule.
+    """
+    __tablename__ = "merchant_rules"
+    # One category per merchant per user - filing the same merchant again
+    # updates the existing rule rather than stacking a second, ambiguous one.
+    __table_args__ = (UniqueConstraint("user_id", "pattern", name="uq_merchant_rule_per_user"),)
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    pattern = Column(String, nullable=False, index=True)
+    category_id = Column(Integer, ForeignKey("budget_categories.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BankTransaction(Base):
+    """
+    A transaction as the bank reported it, kept whether or not it became an
+    Expense.
+
+    Two reasons it isn't collapsed straight into Expense: dedupe (a sync is
+    re-run freely, and `external_id` is what makes that idempotent), and the
+    confirm-inbox - a transaction whose merchant matches no rule waits here
+    as "pending" rather than guessing a category.
+    """
+    __tablename__ = "bank_transactions"
+    # What makes a re-run of a sync idempotent: the same bank transaction
+    # can be offered by the API any number of times and only lands once.
+    __table_args__ = (UniqueConstraint("user_id", "external_id", name="uq_bank_tx_per_user"),)
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=False)
+    external_id = Column(String, nullable=False, index=True)  # bank's transactionId, or a hash when it omits one
+    booked_at = Column(DateTime, nullable=False)
+    amount = Column(Float, nullable=False)  # positive = money spent, in `currency`
+    currency = Column(String, nullable=False)
+    merchant = Column(String, nullable=True)  # cleaned-up display name
+    description = Column(String, nullable=True)  # the raw bank text, kept for trust/debugging
+    merchant_key = Column(String, nullable=True, index=True)  # normalised, what rules match on
+    mcc = Column(String, nullable=True)
+    # "imported" (an Expense exists), "pending" (waiting in the inbox),
+    # "ignored" (user dismissed it), "skipped" (income/transfer, never an expense).
+    status = Column(String, nullable=False, default="pending")
+    expense_id = Column(Integer, ForeignKey("expenses.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

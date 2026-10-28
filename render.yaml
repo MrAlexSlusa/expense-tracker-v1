@@ -38,3 +38,14 @@ services:
         sync: false
       - key: APPLE_PRIVATE_KEY
         sync: false
+      # Bank sync (Revolut and other PSD2 banks) via GoCardless Bank
+      # Account Data. Without these the bank panel stays hidden and
+      # everything else works as before.
+      - key: GOCARDLESS_SECRET_ID
+        sync: false
+      - key: GOCARDLESS_SECRET_KEY
+        sync: false
+      # Shared secret for the scheduled sync (see
+      # .github/workflows/sync-banks.yml). Unset = that endpoint 404s.
+      - key: CRON_SECRET
+        generateValue: true
