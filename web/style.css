@@ -2128,3 +2128,123 @@ textarea {
 }
 
 .empty-cta:hover { background: var(--white-11); }
+
+
+/* --- bank sync: the connection, its inbox, its learned merchants ------- */
+
+.bank-card {
+  margin-bottom: 18px;
+}
+
+.bank-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.bank-name {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* The status is the first thing looked at on this page - a dead consent is
+   silent otherwise - so it reads as a chip rather than as more body text. */
+.bank-status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--white-06);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.bank-status-linked {
+  background: var(--positive-wash);
+  color: var(--positive);
+}
+
+.bank-status-expired,
+.bank-status-error {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+.bank-meta {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.bank-meta-warn {
+  color: var(--danger);
+  margin-top: 4px;
+}
+
+.bank-notice {
+  background: var(--white-06);
+  color: var(--text-soft);
+  font-size: 13.5px;
+  line-height: 1.5;
+  padding: 10px 13px;
+  border-radius: 12px;
+  margin: 0 2px 18px;
+}
+
+.bank-account-row {
+  padding-left: 0;
+  padding-right: 0;
+  background: transparent;
+}
+
+/* An inbox row is two targets in one line: the row itself files the
+   transaction, the × dismisses it. The button fills the row so the tap area
+   is the whole line rather than just the text. */
+.bank-inbox-row {
+  padding-right: 6px;
+}
+
+.bank-inbox-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.bank-inbox-main .tx-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.bank-inbox-main .tx-amount {
+  font-variant-numeric: tabular-nums;
+}
+
+.bank-row-btn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: var(--white-06);
+  color: var(--text-muted);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.bank-row-btn:hover {
+  background: var(--danger-wash);
+  color: var(--danger);
+}

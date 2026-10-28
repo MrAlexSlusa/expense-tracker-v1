@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine, ensure_columns
-from app import api
+from app import api, bank_api
 
 load_dotenv()  # picks up RESEND_API_KEY etc. from a local .env before anything reads os.environ
 
@@ -20,6 +20,7 @@ ensure_columns(table="expenses", columns={
     "original_currency": "VARCHAR",
     "fx_rate": "FLOAT",
 })
+ensure_columns(table="bank_connections", columns={"reference": "VARCHAR", "redirect_uri": "VARCHAR"})
 
 app = FastAPI(title="Expense Tracker")
 
@@ -33,6 +34,7 @@ app.add_middleware(
 )
 
 app.include_router(api.router)
+app.include_router(bank_api.router)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 if WEB_DIR.is_dir():

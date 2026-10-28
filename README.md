@@ -17,6 +17,10 @@ free date ranges to back the new screens. See
 - `app/oauth.py` — Google / Apple / GitHub sign-in as a second identity path onto the same User rows, matched on verified email. Server-side authorization-code flow, since a static frontend can't hold a client secret. Every provider is optional and self-configuring from environment variables — see setup below.
 - `app/email_sender.py` — sends OTP codes via [Resend](https://resend.com); if `RESEND_API_KEY` isn't set, it logs the email (and code) to the console instead of failing, so the whole flow is testable locally with no account needed.
 - `app/quiz.py` — the signup personality quiz: 4 questions map to tag-weighted scores over a category pool, picking 5 starting budget categories tailored to the answers instead of one generic fixed set.
+- `app/gocardless.py` — client for GoCardless Bank Account Data, the open-banking (PSD2) provider the Revolut import runs on. Token minting, the consent round trip, accounts and transactions. Optional: with no credentials set, the bank panel stays hidden and everything else behaves exactly as before.
+- `app/categorizer.py` — turns a noisy bank description ("CARD PAYMENT TO LIDL 0412 BUCURESTI") into a merchant key, then into one of *your* categories, via learned rules first, a built-in table of Romanian merchants second, and the card network's MCC last. Returns nothing rather than guessing.
+- `app/bank_sync.py` — the sync loop: dedupe, skip income and transfers, convert currencies, file what it is sure of and park the rest in a confirm inbox.
+- `app/bank_api.py` — the bank endpoints, including the one the bank's own redirect lands on.
 - `app/models.py` / `app/database.py` — SQLite locally, Postgres in production via `DATABASE_URL`; nothing else changes between the two. `ensure_columns` in `database.py` adds columns a database created by an earlier deploy is missing, since `create_all` only ever creates whole tables and there's no Alembic setup here. The engine uses `pool_pre_ping` — see [Why the pool pings](#why-the-pool-pings) for the failure it prevents.
 - `web/privacy.html` / `web/terms.html` — the privacy policy and terms, written against what the app actually does rather than boilerplate. Plain static pages sharing `style.css`, so they follow the app's chosen theme; linked from the foot of the login screen.
 - `web/` — an installable PWA (no build step, plain HTML/CSS/JS) served by FastAPI at `/app`. Stepping stone to a native App Store/Play Store app — see below.
@@ -277,6 +281,13 @@ checked by the same one command, with no test framework in the browser, no
 `node_modules`, and no build step. Those tests skip themselves if Node isn't
 installed.
 
+`tests/test_bank_sync.py` covers the Revolut import without ever calling the
+aggregator: the three GoCardless read functions are stubbed, so what gets
+tested is the filing decision - normalisation, the rule/keyword/MCC order,
+dedupe across re-runs, income never becoming an expense, and the confirm
+inbox - rather than httpx. A test that needs a live PSD2 consent is a test
+nobody runs.
+
 Anything needing a real DOM - rendering, sheets, event wiring - is covered by
 the end-to-end suite instead.
 
@@ -311,6 +322,84 @@ One caveat worth knowing: e2e tests assert on user-visible English strings
 which is the intended trade - it is the same coupling that makes them able to
 catch a regression a unit test cannot see.
 
+## Automatic Revolut import
+
+Card payments show up in the budget on their own, under the right category,
+without anyone typing them in.
+
+**Why open banking and not Revolut's API.** Revolut publishes an API for
+Revolut *Business* only — a personal account has no API at all. The way in
+is PSD2: a licensed account information service reads the account with your
+consent. This uses [GoCardless Bank Account
+Data](https://bankaccountdata.gocardless.com/) (the former Nordigen), which
+is free, covers Revolut in Romania, and means the app never sees a Revolut
+password. The same machinery works for any other PSD2 bank, so the picker
+lists them all with Revolut first.
+
+**How a transaction becomes an expense.**
+
+1. The sync pulls booked transactions (pending ones are skipped — their ids
+   change when they settle, which would either duplicate the expense or
+   strand it).
+2. Incoming money, top-ups and vault moves are recorded and dropped: they
+   are not spending.
+3. The merchant is normalised — `CARD PAYMENT TO LIDL 0412 BUCURESTI` →
+   `lidl bucuresti` — so one rule covers every branch and every spelling.
+4. The category is decided by, in order: a rule you wrote by filing that
+   merchant yourself, a built-in table of merchants common on a Romanian
+   card, then the card network's MCC.
+5. If none of those resolves, the transaction waits in **To confirm** rather
+   than being guessed at. Filing it there writes the rule, so that merchant
+   never asks again.
+
+Amounts in another currency are converted with the same BNR rates the rest
+of the app uses, and keep the original (`€25 (131.31 lei)`). If rates are
+unavailable the transaction waits instead of being filed at a made-up rate.
+
+### Setting it up
+
+1. Sign up at <https://bankaccountdata.gocardless.com/> (free, no card) and
+   create a secret pair under **Developers → User secrets**.
+2. Set `GOCARDLESS_SECRET_ID` and `GOCARDLESS_SECRET_KEY` on the backend
+   (Render → Environment, or `.env` locally). Until both are set the bank
+   row does not appear in the app at all.
+3. Make sure `OAUTH_ALLOWED_ORIGINS` contains wherever the frontend is
+   served from — the bank redirects the browser back there, and the same
+   allowlist that guards social sign-in guards this.
+4. In the app: **Profile → Bank sync → Connect a bank → Revolut**, then
+   authenticate in Revolut. You come back to a filled-in budget: the first
+   90 days are imported straight away.
+
+### Keeping it automatic
+
+`POST /api/bank/sync-all` syncs every linked connection. It is authenticated
+with a shared secret header rather than a user token (there is no user on a
+scheduled run) and 404s unless `CRON_SECRET` is set, so a deployment that
+never configured one has no endpoint sitting open.
+
+`.github/workflows/sync-banks.yml` calls it once a day. It needs two things
+on the repository: a `CRON_SECRET` **secret** matching the backend's, and an
+`API_URL` **variable** pointing at the backend. Without them the workflow
+exits quietly instead of failing every morning.
+
+Once a day is deliberate — banks book card payments once a day, and
+GoCardless caps transaction calls per account per day, so a tighter schedule
+buys nothing and risks the cap. A Render cron job is the alternative if you
+ever move off the free plan: `python -m scripts.sync_banks` does the same
+work in-process.
+
+### The 90-day consent
+
+PSD2 caps consent at 90 days. After that every call for that connection
+fails until you re-authenticate — there is no way around it, for anyone.
+The app shows the countdown on the bank page and flips the connection to
+**Consent expired** when it runs out; reconnecting is the same flow as the
+first time, and already-imported expenses are untouched.
+
+Disconnecting a bank removes the connection and its transaction records but
+keeps the expenses: those are your spending history, not a cache of the
+bank's.
+
 ## What's NOT built yet (in order)
 
 1. **A visual frontend** — ✅ done; `web/` is the app described above.
@@ -319,6 +408,7 @@ catch a regression a unit test cannot see.
 4. **Loading and error states** — the design doesn't cover skeletons or error copy; failures currently surface as a message where one fits.
 5. **Apple sign-in** — the code path is written and unit-tested; it's waiting on a paid Apple Developer account. Google and GitHub are already live.
 6. **Payments** — wire this in before polishing anything else.
+7. **A second bank** — the connection model and the picker already handle more than one; only the Revolut path has been exercised end to end.
 
 ## Importing your monthly budget spreadsheets
 

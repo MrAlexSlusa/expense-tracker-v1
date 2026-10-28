@@ -159,6 +159,14 @@ const state = {
   editingCategoryId: null,
   busy: false,
   error: "",
+
+  // Bank sync. bankNotice carries the one-line outcome of the last link or
+  // sync; it is state rather than a toast because the page it belongs to is
+  // also where the user acts on it.
+  bankBusy: false,
+  bankTxId: null, // the pending transaction the category sheet is filing
+  bankRemember: true, // write a merchant rule when filing it
+  bankNotice: "",
 };
 
 const data = {
@@ -172,6 +180,10 @@ const data = {
   analyticsBuckets: null, // lazily loaded, only the Analytics tab needs it
   analyticsExpenses: null, // the rows behind those buckets, for Analytics' own list
   rates: null, // the exchange-rates page payload, loaded only when that page is opened
+  bank: null, // /api/bank/status; null until something has asked for it
+  bankInbox: null, // transactions the sync would not file on its own
+  bankRules: null, // learned merchant -> category rules
+  institutions: null, // the bank list, loaded only when the picker opens
 };
 
 let currentCurrency = "USD";
@@ -1139,6 +1151,11 @@ function profileView() {
     ["open-categories", t("categories"), String(data.categories.length)],
     ["open-income", t("income"), periodOf(currentRange().start)],
     ["open-import", t("importSpreadsheet"), ".xlsx / .csv"],
+    // Only once the server has bank sync configured. A row that exists just
+    // to say the feature is unavailable is worse than no row at all.
+    ...(data.bank && data.bank.configured
+      ? [["open-bank", t("bankSync"), bankRowValue()]]
+      : []),
     ["open-rates", t("exchangeRates"), "EUR · USD · GBP · BTC · ETH"],
   ].map(([action, label, value]) => `
     <button class="card-row settings-row" data-action="${action}">
@@ -1247,6 +1264,147 @@ function ratesView() {
       </div>
 
       <p class="rates-note">${esc(t("ratesSourceNote"))}</p>
+    </div>`;
+}
+
+
+// --- bank sync -----------------------------------------------------------
+
+// What the Profile row shows at a glance: whatever needs doing most.
+function bankRowValue() {
+  const bank = data.bank;
+  if (!bank || !bank.connections.length) return t("connectBank");
+  if (bank.connections.some((c) => c.status === "expired")) return t("bankStatusExpired");
+  if (bank.pending) return `${bank.pending} \u00b7 ${t("bankInbox")}`;
+  return t("bankStatusLinked");
+}
+
+function bankConnectionHtml(connection) {
+  const statusKey = {
+    linked: "bankStatusLinked",
+    pending: "bankStatusPending",
+    expired: "bankStatusExpired",
+    error: "bankStatusError",
+  }[connection.status] || "bankStatusPending";
+
+  const synced = connection.last_synced_at
+    ? t("bankLastSynced", { when: connection.last_synced_at })
+    : t("bankNeverSynced");
+
+  // The 90-day consent is the one thing about open banking that will bite
+  // silently, so the countdown is on screen rather than only in an email.
+  let consent = "";
+  if (connection.status === "expired") consent = t("bankConsentExpiredNote");
+  else if (connection.days_left != null) consent = t("bankConsentDays", { n: connection.days_left });
+
+  const accounts = (connection.accounts || []).map((account) => `
+    <button class="card-row bank-account-row" data-action="bank-toggle-account"
+      data-id="${account.id}" data-value="${account.enabled ? "0" : "1"}">
+      <span class="settings-row-label">${esc(account.name)}</span>
+      <span class="sheet-check">${account.enabled ? "\u2713" : ""}</span>
+    </button>`).join("");
+
+  const primary = connection.status === "expired"
+    ? `<button class="btn-primary" data-action="bank-open-connect">${esc(t("bankReconnect"))}</button>`
+    : `<button class="btn-primary" data-action="bank-sync" data-id="${connection.id}"
+         ${state.bankBusy ? "disabled" : ""}>${esc(t(state.bankBusy ? "syncing" : "syncNow"))}</button>`;
+
+  return `
+    <div class="card card-16 bank-card">
+      <div class="bank-head">
+        <span class="bank-name">${esc(connection.institution_name)}</span>
+        <span class="bank-status bank-status-${esc(connection.status)}">${esc(t(statusKey))}</span>
+      </div>
+      <div class="bank-meta">${esc(synced)}${consent ? ` \u00b7 ${esc(consent)}` : ""}</div>
+      ${connection.last_error ? `<div class="bank-meta bank-meta-warn">${esc(connection.last_error)}</div>` : ""}
+      ${accounts ? `<span class="caption section-caption">${esc(t("bankAccounts"))}</span>${accounts}` : ""}
+      <div class="sheet-btn-row">
+        ${primary}
+        <button class="btn-secondary" data-action="bank-disconnect" data-id="${connection.id}">${esc(t("bankDisconnect"))}</button>
+      </div>
+    </div>`;
+}
+
+function bankInboxRowHtml(row) {
+  const sub = row.suggested_category_name
+    ? `${dayLabel(row.date)} \u00b7 ${row.suggested_category_name}`
+    : dayLabel(row.date);
+
+  return `
+    <div class="card-row bank-inbox-row">
+      <button class="bank-inbox-main" data-action="bank-file-open" data-id="${row.id}">
+        <span class="tx-name">${esc(row.merchant)}
+          <span class="tx-sub">${esc(sub)}</span>
+        </span>
+        <span class="tx-amount">${esc(fmtIn(row.amount, row.currency))}</span>
+      </button>
+      <button class="bank-row-btn" data-action="bank-ignore" data-id="${row.id}"
+        aria-label="${esc(t("bankIgnore"))}">\u00d7</button>
+    </div>`;
+}
+
+// A page rather than a sheet: three stacked sections, and the inbox is
+// something you work through rather than a setting you flip. Reached from the
+// Profile tab, like the rates page.
+function bankView() {
+  const bank = data.bank;
+
+  if (!bank) {
+    return `
+      <div class="view">
+        <button class="back-pill" data-action="go-profile">\u2190 ${esc(t("back"))}</button>
+        <p class="empty-note">${esc(t("loading"))}</p>
+      </div>`;
+  }
+
+  if (!bank.configured) {
+    return `
+      <div class="view">
+        <button class="back-pill" data-action="go-profile">\u2190 ${esc(t("back"))}</button>
+        <div class="rates-head"><div class="caption">${esc(t("bankSync"))}</div></div>
+        <p class="empty-note">${esc(t("bankNotConfigured"))}</p>
+      </div>`;
+  }
+
+  const inbox = data.bankInbox || [];
+  const rules = data.bankRules || [];
+
+  const inboxBlock = inbox.length
+    ? `<div class="card" style="margin-bottom:20px">${inbox.map(bankInboxRowHtml).join("")}</div>`
+    : `<p class="empty-note">${esc(t("bankInboxEmpty"))}</p>`;
+
+  const rulesBlock = rules.length
+    ? `<div class="card" style="margin-bottom:20px">${rules.map((rule) => `
+        <div class="card-row bank-inbox-row">
+          <span class="tile">${esc(rule.category_icon || "\ud83d\udcb0")}</span>
+          <span class="tx-name">${esc(rule.pattern)}
+            <span class="tx-sub">${esc(rule.category_name)}</span>
+          </span>
+          <button class="bank-row-btn" data-action="bank-rule-delete" data-id="${rule.id}"
+            aria-label="${esc(t("delete"))}">\u00d7</button>
+        </div>`).join("")}</div>`
+    : `<p class="empty-note">${esc(t("bankRulesEmpty"))}</p>`;
+
+  return `
+    <div class="view">
+      <button class="back-pill" data-action="go-profile">\u2190 ${esc(t("back"))}</button>
+
+      <div class="rates-head"><div class="caption">${esc(t("bankSync"))}</div></div>
+      <p class="rates-note" style="margin-bottom:16px">${esc(t("bankSyncHint"))}</p>
+      ${state.bankNotice ? `<p class="bank-notice">${esc(state.bankNotice)}</p>` : ""}
+
+      ${bank.connections.map(bankConnectionHtml).join("")}
+      <button class="btn-primary" style="width:100%;margin-bottom:22px"
+        data-action="bank-open-connect">${esc(t("connectBank"))}</button>
+
+      <span class="caption section-caption">${esc(t("bankInbox"))}</span>
+      <p class="rates-note" style="margin-bottom:12px">${esc(t("bankInboxHint"))}</p>
+      ${inboxBlock}
+
+      <span class="caption section-caption">${esc(t("bankRules"))}</span>
+      ${rulesBlock}
+
+      <p class="error">${esc(state.error)}</p>
     </div>`;
 }
 
@@ -1641,6 +1799,80 @@ function profileSheet() {
     <p class="error">${esc(state.error)}</p>`, { persistent: true });
 }
 
+// The whole institution list is rendered once and filtered by hiding rows,
+// the way the emoji picker is: re-rendering on every keystroke would rebuild
+// the input under the caret and drop the keyboard on iOS.
+function bankConnectSheet() {
+  const list = data.institutions;
+
+  let body;
+  if (!list) {
+    body = `<p class="empty-note">${esc(t("loading"))}</p>`;
+  } else if (!list.length) {
+    body = `<p class="empty-note">${esc(t("bankNoInstitutions"))}</p>`;
+  } else {
+    body = `<div id="bank-list" class="card card-16" style="margin-bottom:18px">${list.map((bank) => `
+      <button class="card-row bank-pick" data-action="bank-connect" data-value="${esc(bank.id)}"
+        data-words="${esc(bank.name.toLowerCase())}">
+        <span style="flex:1">${esc(bank.name)}</span>
+        <span class="chevron">\u203a</span>
+      </button>`).join("")}
+      <p id="bank-empty" class="empty-note" hidden>${esc(t("bankNoInstitutions"))}</p></div>`;
+  }
+
+  return sheetShell(`
+    <div class="sheet-title">${esc(t("bankChooseBank"))}</div>
+    <label class="field"><span>${esc(t("search"))}</span>
+      <input id="bank-search" type="text" autocomplete="off" />
+    </label>
+    ${body}
+    <button class="btn-secondary" style="width:100%" data-action="close-sheet">${esc(t("cancel"))}</button>
+    <p class="error">${esc(state.error)}</p>`, { persistent: true });
+}
+
+// Filing one transaction from the inbox. The suggested category is
+// pre-ticked, so the common case is one tap on the row that is already
+// highlighted rather than a hunt through the list.
+function bankCategorySheet() {
+  const row = (data.bankInbox || []).find((tx) => tx.id === state.bankTxId);
+  if (!row) {
+    return sheetShell(`<div class="sheet-title">${esc(t("bankPickCategory"))}</div>
+      <p class="empty-note">${esc(t("bankInboxEmpty"))}</p>
+      <button class="btn-secondary" style="width:100%" data-action="close-sheet">${esc(t("cancel"))}</button>`,
+      { persistent: true });
+  }
+
+  const categories = decoratedCategories();
+  if (!categories.length) {
+    return sheetShell(`<div class="sheet-title">${esc(row.merchant)}</div>
+      <p class="empty-note">${esc(t("errNoCategoriesForBank"))}</p>
+      <button class="btn-secondary" style="width:100%" data-action="close-sheet">${esc(t("cancel"))}</button>`,
+      { persistent: true });
+  }
+
+  const options = categories.map((category) => ({
+    action: "bank-file",
+    value: String(category.id),
+    label: `${category.emoji || ""} ${category.name}`.trim(),
+    selected: row.suggested_category_id === category.id,
+  }));
+
+  return sheetShell(`
+    <div class="sheet-title">${esc(row.merchant)}</div>
+    <p class="sheet-hint">${esc(dayLabel(row.date))} \u00b7 ${esc(fmtIn(row.amount, row.currency))}</p>
+    <label class="check-row">
+      <input type="checkbox" ${state.bankRemember ? "checked" : ""} data-action="bank-toggle-remember" />
+      <span>${esc(t("bankRemember"))}</span>
+    </label>
+    <p class="sheet-hint">${esc(t("bankRememberHint", { merchant: row.merchant }))}</p>
+    ${optionCard(options)}
+    <div class="sheet-btn-row">
+      <button class="btn-secondary" data-action="close-sheet">${esc(t("cancel"))}</button>
+      <button class="btn-danger-soft" data-action="bank-ignore" data-id="${row.id}">${esc(t("bankIgnore"))}</button>
+    </div>
+    <p class="error">${esc(state.error)}</p>`, { persistent: true });
+}
+
 const SHEETS = {
   period: periodSheet,
   add: addSheet,
@@ -1656,6 +1888,8 @@ const SHEETS = {
   categoryEdit: categoryEditSheet,
   income: incomeSheet,
   profile: profileSheet,
+  bankConnect: bankConnectSheet,
+  bankCategory: bankCategorySheet,
 };
 
 // --- render --------------------------------------------------------------
@@ -1663,6 +1897,7 @@ const SHEETS = {
 const VIEWS = {
   activity: activityView,
   rates: ratesView,
+  bank: bankView,
   summary: summaryView,
   detail: detailView,
   budget: budgetView,
@@ -1733,6 +1968,32 @@ function patchTransactionList() {
 }
 
 // --- loading -------------------------------------------------------------
+
+// The bank panel's three lists in one call each. Kept out of refresh() on
+// purpose: only the Profile tab and the bank page need them, and a failure
+// here must not take the rest of the app's data with it.
+async function loadBankStatus() {
+  try {
+    data.bank = await apiFetch("/api/bank/status");
+  } catch {
+    // An older backend has no /api/bank at all. Treating that as "not
+    // configured" keeps the Profile row hidden instead of showing an error
+    // on a tab that has nothing to do with banks.
+    data.bank = { configured: false, connections: [], pending: 0 };
+  }
+}
+
+async function loadBank() {
+  await loadBankStatus();
+  if (!data.bank.configured) return;
+  const [inbox, rules] = await Promise.all([
+    apiFetch("/api/bank/inbox"),
+    apiFetch("/api/bank/rules"),
+  ]);
+  data.bankInbox = inbox;
+  data.bankRules = rules;
+}
+
 
 async function loadIdentity() {
   const [me, stats] = await Promise.all([
@@ -1900,12 +2161,19 @@ async function saveTimeZone(zone) {
 }
 
 const ACTIONS = {
-  "set-view": (el) => {
+  "set-view": async (el) => {
     state.view = el.dataset.value;
     if (state.view === "summary") state.selCat = null;
+    if (state.view === "profile" && !data.bank) await loadBankStatus();
     if (state.view === "analytics" && !data.analyticsBuckets) return refresh();
   },
-  "go-profile": () => { state.view = "profile"; },
+  // The Profile tab's bank row needs the status before it can be drawn, and
+  // this is the only way onto that tab, so the fetch lives here rather than
+  // in refresh() where every other tab would pay for it.
+  "go-profile": async () => {
+    state.view = "profile";
+    if (!data.bank) await loadBankStatus();
+  },
   "go-summary": () => { state.view = "summary"; state.selCat = null; },
   "open-category": (el) => { state.view = "detail"; state.selCat = Number(el.dataset.id); },
   "clear-category": () => { state.view = "summary"; state.selCat = null; },
@@ -2193,6 +2461,86 @@ const ACTIONS = {
     showAuthScreen();
     return "no-render";
   },
+  "open-bank": async () => {
+    state.view = "bank";
+    state.error = "";
+    await loadBank();
+  },
+  "bank-open-connect": async () => {
+    state.sheet = "bankConnect";
+    state.error = "";
+    if (!data.institutions) {
+      data.institutions = await apiFetch("/api/bank/institutions?country=RO");
+    }
+  },
+  "bank-connect": async (el) => {
+    // The bank takes over the whole window: its own login, possibly its app,
+    // then a redirect back here. A popup would be blocked on iOS and lose
+    // the redirect, so this navigates away and picks the thread back up from
+    // the fragment on return (consumeBankRedirect).
+    const redirect = window.location.origin + window.location.pathname;
+    const res = await apiFetch("/api/bank/connect", {
+      method: "POST",
+      body: JSON.stringify({ institution_id: el.dataset.value, redirect_uri: redirect }),
+    });
+    window.location.href = res.link;
+    return "no-render";
+  },
+  "bank-sync": async (el) => {
+    state.bankBusy = true;
+    state.error = "";
+    render();
+    try {
+      const res = await apiFetch(`/api/bank/connections/${el.dataset.id}/sync`, { method: "POST" });
+      state.bankNotice = res.imported || res.pending
+        ? t("bankSyncResult", { imported: res.imported, pending: res.pending })
+        : t("bankSyncNothing");
+      if (res.errors && res.errors.length) state.error = res.errors[0];
+      await loadBank();
+      // Imported transactions are expenses now, so every total on the other
+      // tabs is stale until this runs.
+      await refresh({ identity: true, analytics: true });
+    } finally {
+      state.bankBusy = false;
+    }
+  },
+  "bank-disconnect": async (el) => {
+    if (!window.confirm(t("bankDisconnectConfirm"))) return;
+    await apiFetch(`/api/bank/connections/${el.dataset.id}`, { method: "DELETE" });
+    state.bankNotice = "";
+    await loadBank();
+  },
+  "bank-toggle-account": async (el) => {
+    await apiFetch(`/api/bank/accounts/${el.dataset.id}?enabled=${el.dataset.value === "1"}`, { method: "PUT" });
+    await loadBankStatus();
+  },
+  "bank-file-open": (el) => {
+    state.bankTxId = Number(el.dataset.id);
+    state.bankRemember = true;
+    state.error = "";
+    state.sheet = "bankCategory";
+  },
+  "bank-toggle-remember": () => { state.bankRemember = !state.bankRemember; },
+  "bank-file": async (el) => {
+    await apiFetch(`/api/bank/inbox/${state.bankTxId}`, {
+      method: "POST",
+      body: JSON.stringify({ category_id: Number(el.dataset.value), remember: state.bankRemember }),
+    });
+    state.sheet = null;
+    state.bankTxId = null;
+    await loadBank();
+    await refresh({ identity: true, analytics: true });
+  },
+  "bank-ignore": async (el) => {
+    await apiFetch(`/api/bank/inbox/${el.dataset.id}`, { method: "DELETE" });
+    state.sheet = null;
+    state.bankTxId = null;
+    await loadBank();
+  },
+  "bank-rule-delete": async (el) => {
+    await apiFetch(`/api/bank/rules/${el.dataset.id}`, { method: "DELETE" });
+    await loadBank();
+  },
 };
 
 document.addEventListener("click", async (event) => {
@@ -2219,6 +2567,21 @@ document.addEventListener("input", (event) => {
   if (event.target.id === "search-input") {
     state.q = event.target.value;
     if (!patchTransactionList()) render();
+    return;
+  }
+
+  // Same approach as the emoji picker below: hide rows rather than
+  // re-render, so the field keeps focus and the caret.
+  if (event.target.id === "bank-search") {
+    const query = event.target.value.trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll("#bank-list .bank-pick").forEach((row) => {
+      const hit = !query || row.dataset.words.includes(query);
+      row.hidden = !hit;
+      if (hit) shown++;
+    });
+    const empty = document.getElementById("bank-empty");
+    if (empty) empty.hidden = shown > 0;
     return;
   }
 
@@ -2279,10 +2642,50 @@ function showAuthScreen() {
   loadOauthProviders();
 }
 
+// Set by consumeBankRedirect() before login finishes, applied once the app
+// screen is up: the user left the app at the bank and should come back to
+// the page they left from, not to Activity.
+let pendingBankNotice = null;
+
+function consumeBankRedirect() {
+  const hash = new URLSearchParams(window.location.hash.slice(1));
+  const outcome = hash.get("bank");
+  if (!outcome) return;
+
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  pendingBankNotice = {
+    outcome,
+    imported: Number(hash.get("imported") || 0),
+    pending: Number(hash.get("pending") || 0),
+    message: hash.get("message") || "",
+  };
+}
+
+function bankNoticeText(notice) {
+  if (notice.outcome === "linked") {
+    return notice.imported || notice.pending
+      ? `${t("bankLinkedOk")} ${t("bankSyncResult", { imported: notice.imported, pending: notice.pending })}`
+      : t("bankLinkedOk");
+  }
+  if (notice.outcome === "pending") return t("bankLinkPending");
+  // "error" and "expired" both carry the provider's own text, which says more
+  // than our generic line - it is shown alongside it rather than instead.
+  return notice.message ? `${t("bankLinkFailed")} ${notice.message}` : t("bankLinkFailed");
+}
+
 async function showAppScreen() {
   showOnlyScreen(appScreen);
   state.view = "activity";
   await refresh({ identity: true });
+
+  if (pendingBankNotice) {
+    const notice = pendingBankNotice;
+    pendingBankNotice = null;
+    state.bankNotice = bankNoticeText(notice);
+    state.view = "bank";
+    await loadBank();
+    render();
+  }
 }
 
 async function afterLogin() {
@@ -2500,6 +2903,8 @@ applySettings(settings);
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
 }
+
+consumeBankRedirect();
 
 if (consumeOauthRedirect()) {
   // handled - afterLogin() or the auth screen is already on its way
