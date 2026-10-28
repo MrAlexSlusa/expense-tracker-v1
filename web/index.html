@@ -118,6 +118,11 @@
 <!-- Every bottom sheet renders into here, one at a time. -->
 <div id="sheet-root"></div>
 
+<!-- Lit by app.js while any request is in flight, and the one toast slot
+     ("Saving…" turning into "Saved"). Both sit above every screen. -->
+<div id="progress" class="progress" aria-hidden="true"><i></i></div>
+<div id="toast-root" class="toast-root" role="status" aria-live="polite"></div>
+
 <script src="./config.js"></script>
 <script src="./i18n.js"></script>
 <script src="./app.js"></script>

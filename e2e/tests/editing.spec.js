@@ -59,9 +59,13 @@ test("the date of a logged expense can be moved to another day", async ({ page }
 
   const field = page.locator("#add-date");
   const today = await field.inputValue();
-  const earlier = new Date(today);
-  earlier.setDate(earlier.getDate() - 3);
-  const target = earlier.toISOString().slice(0, 10);
+  // Stay inside the current month: the list defaults to a monthly view, so a
+  // day that crosses into the previous month would hide the row altogether
+  // (which is what broke this test in the first days of every month). On the
+  // 1st there is no earlier day in the month, so move forward instead.
+  const moved = new Date(today);
+  moved.setUTCDate(moved.getUTCDate() + (moved.getUTCDate() > 1 ? -1 : 1));
+  const target = moved.toISOString().slice(0, 10);
 
   await field.fill(target);
   await page.locator('[data-action="save-expense"]').click();

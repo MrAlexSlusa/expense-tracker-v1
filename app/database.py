@@ -12,6 +12,13 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./expenses.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
+# A bare "postgresql://" picks the driver for you, and SQLAlchemy 2.1 changed
+# its pick from psycopg2 to psycopg 3. requirements.txt installs psycopg2, so
+# on 2.1 the import died at startup with "No module named 'psycopg'" and every
+# deploy failed. Name the driver we actually ship.
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
 # The managed Postgres behind DATABASE_URL drops connections that have been
