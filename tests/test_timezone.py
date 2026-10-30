@@ -158,7 +158,7 @@ def test_an_expense_logged_right_now_counts_as_today_whatever_the_hour():
     assert [r["date"] for r in rows] == [expected_day], "expense filed under the wrong day"
 
     stats = client.get("/api/me/stats", headers=headers).json()
-    assert stats["current_streak_days"] >= 1, "a just-logged expense broke the streak"
+    assert stats["total_this_month"] > 0, "a just-logged expense missed this month's total"
 
     # When the two disagree, the user's day is the one that must win - this is
     # the window the original bug lived in, and it is only reachable for part

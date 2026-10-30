@@ -2,7 +2,7 @@ const { test, expect } = require("@playwright/test");
 const { signUp, storage, freshEmail, PASSWORD } = require("./helpers");
 
 test.describe("signing in", () => {
-  test("a new account goes through the quiz and into the app", async ({ page }) => {
+  test("a new account lands straight in the app, with categories ready", async ({ page }) => {
     const { email } = await signUp(page);
     await expect(page.locator("#app-screen")).toBeVisible();
     // The account it created is the one we asked for.
@@ -12,7 +12,14 @@ test.describe("signing in", () => {
       return r.json();
     });
     expect(me.email).toBe(email);
-    expect(me.onboarded).toBe(true);
+
+    // And it can log something immediately - the categories are already there.
+    const categories = await page.evaluate(async () => {
+      const r = await fetch(window.API_BASE_URL + "/api/budget", {
+        headers: { Authorization: "Bearer " + localStorage.getItem("expense_tracker_token") } });
+      return r.json();
+    });
+    expect(categories.length).toBe(6);
   });
 
   test("wrong credentials are refused without signing anyone in", async ({ page }) => {
@@ -48,7 +55,7 @@ test.describe("save my login info", () => {
     await page.locator("#email").fill(freshEmail());
     await page.locator("#password").fill(PASSWORD);
     await page.locator("#auth-submit").click();
-    await expect(page.locator("#quiz-screen")).toBeVisible();
+    await expect(page.locator("#app-screen")).toBeVisible();
 
     expect(await storage(page, "sessionStorage", "expense_tracker_token")).not.toBeNull();
     expect(await storage(page, "localStorage", "expense_tracker_token")).toBeNull();

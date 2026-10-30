@@ -12,7 +12,8 @@ label rows (TOTAL INCOME, TOTAL EXPENSES, Ramas, GOALS/ACTUAL blocks) are
 interleaved rather than confined to fixed columns. Rather than hard-coding
 column positions (fragile across exports), this scans each row's non-empty
 cells left to right and classifies (name, amount[, tag]) groups by shape:
-a tag-less pair is income, a tag'd pair/triple is a spending category, and
+a tag'd pair/triple is a spending category (a tag-less pair was income,
+which is no longer tracked, and is stepped over), and
 the GOALS/ACTUAL block is state-tracked across rows since its WANTS/NEEDS/
 SAVINGS rows don't repeat the header.
 
@@ -41,10 +42,6 @@ MONTH_ABBR = {
 FILENAME_PERIOD = re.compile(r"(20\d{2}).*?\b(" + "|".join(MONTH_ABBR) + r")[a-z]*\b", re.IGNORECASE)
 
 
-@dataclass
-class IncomeRow:
-    name: str
-    amount: float
 
 
 @dataclass
@@ -54,17 +51,11 @@ class CategoryRow:
     tag: Optional[str]  # "Needs" / "Wants" / "Savings"
 
 
-@dataclass
-class GoalPct:
-    target_pct: Optional[float] = None
-    actual_pct: Optional[float] = None
 
 
 @dataclass
 class ImportResult:
-    income: List[IncomeRow] = field(default_factory=list)
     categories: List[CategoryRow] = field(default_factory=list)
-    goals: dict = field(default_factory=dict)  # {"Wants": GoalPct, "Needs": GoalPct, "Savings": GoalPct}
     warnings: List[str] = field(default_factory=list)
 
 
@@ -117,17 +108,13 @@ def parse_workbook(content: bytes, filename: str) -> ImportResult:
                 i += 1
                 continue
 
+            # The GOALS/ACTUAL block is no longer imported, but it is still
+            # recognised and stepped over: left to the generic rules below, its
+            # "Wants 50%" pairs would be read as spending rows.
             if upper in GOAL_TAGS and current_block is not None and i + 1 < len(tokens):
-                pct = _parse_percent(tokens[i + 1])
                 consumed = 2
                 if i + 2 < len(tokens) and parse_european_amount(tokens[i + 2]) is not None:
-                    consumed = 3  # trailing absolute amount column, currently unused but consumed so it isn't misread as a new row start
-                if pct is not None:
-                    goal = result.goals.setdefault(upper.capitalize(), GoalPct())
-                    if current_block == "goal":
-                        goal.target_pct = pct
-                    else:
-                        goal.actual_pct = pct
+                    consumed = 3  # trailing absolute amount column
                 i += consumed
                 continue
 
@@ -149,7 +136,10 @@ def parse_workbook(content: bytes, filename: str) -> ImportResult:
                         result.categories.append(CategoryRow(name=token, amount=amount, tag=tokens[i + 2].capitalize()))
                         i += 3
                     else:
-                        result.income.append(IncomeRow(name=token, amount=amount))
+                        # A tag-less name+amount pair is an income row. Income is
+                        # not tracked any more, so it is stepped over - but the
+                        # pair is still consumed together, or the amount would be
+                        # picked up as the next row's name.
                         i += 2
                     continue
 

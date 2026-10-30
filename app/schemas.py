@@ -19,14 +19,8 @@ class TokenResponse(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    requires_otp: bool = False
     access_token: Optional[str] = None
     token_type: str = "bearer"
-
-
-class VerifyOtpRequest(BaseModel):
-    email: EmailStr
-    code: str
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -39,37 +33,11 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 
-class TwoFactorUpdateRequest(BaseModel):
-    enabled: bool
-
-
 class DeleteAccountRequest(BaseModel):
     # Required only for accounts that have a password; a social-only account
     # has none to check, and the bearer token is the proof of identity there.
     password: Optional[str] = None
 
-
-class OnboardingRequest(BaseModel):
-    answers: dict[str, str]  # {question_id: option_id}
-    lang: str = "en"
-
-
-class ChatMessageRequest(BaseModel):
-    text: str
-
-
-class ChatMessageResponse(BaseModel):
-    amount: float | None = None
-    category: str | None = None
-    over_budget: bool = False
-    spent: float | None = None  # this category's total for the current month, if over_budget
-    target: float | None = None
-    parsed: bool = True  # false if the message didn't parse - frontend shows its own localized error
-    # Set only when the message named a currency other than the user's own, so
-    # the reply can confirm what was converted rather than echoing a number the
-    # sender never typed.
-    original_amount: float | None = None
-    original_currency: str | None = None
 
 
 class CategoryOut(BaseModel):
@@ -143,18 +111,5 @@ class ProfileUpdateRequest(BaseModel):
     avatar_url: Optional[str] = None  # data URL; empty string clears it
 
 
-class GoalUpdateRequest(BaseModel):
-    wants_pct: float
-    needs_pct: float
-    savings_pct: float
 
 
-class IncomeCreateRequest(BaseModel):
-    name: str
-    amount: float
-    period: Optional[str] = None  # "YYYY-MM"; defaults to current month
-
-
-class IncomeUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    amount: Optional[float] = None

@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 from app import bnr, gocardless
 from app.categorizer import (
     display_merchant,
-    looks_like_transfer,
+    is_internal_movement,
     normalize_merchant,
     suggest_category,
     transaction_fingerprint,
@@ -339,9 +339,14 @@ def _ingest(
         mcc=str(mcc) if mcc else None,
     )
 
-    # Money in, or money moved between the user's own pockets. Recorded so it
-    # stops being offered, but never a budget line.
-    if signed >= 0 or looks_like_transfer(merchant_text):
+    # Money in, or money the bank itself labels as a move between the user's
+    # own pockets. Recorded so it stops being offered, but never a budget line.
+    #
+    # Only certainties are dropped here. An outgoing row that merely *reads*
+    # like a transfer ("THE EXCHANGE PUB", "ATM CAFE") falls through to the
+    # inbox instead: dropping it would hide a real payment somewhere the user
+    # cannot see it, and money leaving the account is their call to make.
+    if signed >= 0 or is_internal_movement(merchant_text):
         row.status = "skipped"
         db.add(row)
         db.commit()

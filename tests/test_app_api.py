@@ -3,6 +3,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import io
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,6 +12,8 @@ from openpyxl import Workbook
 
 from app.database import Base, get_db
 from app.main import app
+from app.starter import starter_categories
+from app.models import User, BudgetCategory
 
 TEST_DB_URL = "sqlite:///:memory:"
 engine = create_engine(TEST_DB_URL, connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -27,6 +30,24 @@ def override_get_db():
 
 
 app.dependency_overrides[get_db] = override_get_db
+
+
+@pytest.fixture(autouse=True)
+def use_this_modules_db():
+    """
+    Points the app at this module's database for the duration of each test.
+
+    Every test module installs its own get_db override at import time, so the
+    last one imported wins for the whole session. That is harmless while a
+    module only talks over HTTP, but some tests here also hold a Session of
+    their own and assert across both - so the override is (re)installed per
+    test rather than once at import.
+    """
+    previous = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = override_get_db
+    yield
+    if previous is not None:
+        app.dependency_overrides[get_db] = previous
 client = TestClient(app)
 
 
@@ -38,17 +59,6 @@ def _signup(email="alex@example.com", password="hunter2222") -> str:
 
 def _auth(token):
     return {"Authorization": f"Bearer {token}"}
-
-
-def test_signup_defaults_goal_split():
-    token = _signup("goals@example.com")
-    r = client.get("/api/me", headers=_auth(token))
-    assert r.status_code == 200
-    body = r.json()
-    assert body["wants_goal_pct"] == 50.0
-    assert body["needs_goal_pct"] == 40.0
-    assert body["savings_goal_pct"] == 10.0
-    assert body["avatar_url"] is None
 
 
 def test_update_profile_display_name_and_avatar():
@@ -66,16 +76,6 @@ def test_update_profile_rejects_non_image_avatar():
     assert r.status_code == 400
 
 
-def test_update_goals_must_sum_to_100():
-    token = _signup("goalcheck@example.com")
-    r = client.put("/api/me/goals", headers=_auth(token), json={"wants_pct": 60, "needs_pct": 30, "savings_pct": 20})
-    assert r.status_code == 400
-
-    r = client.put("/api/me/goals", headers=_auth(token), json={"wants_pct": 60, "needs_pct": 30, "savings_pct": 10})
-    assert r.status_code == 200
-    assert r.json()["wants_goal_pct"] == 60
-
-
 def test_stats_reflect_logged_expenses():
     token = _signup("stats@example.com")
     client.post("/api/expenses", headers=_auth(token), json={"amount": 25.0, "note": "lunch"})
@@ -85,25 +85,6 @@ def test_stats_reflect_logged_expenses():
     assert r.status_code == 200
     body = r.json()
     assert body["total_all_time"] == 40.0
-    assert body["current_streak_days"] >= 1
-
-
-def test_income_crud_scoped_to_period():
-    token = _signup("income@example.com")
-    r = client.post("/api/income", headers=_auth(token), json={"name": "Salary", "amount": 3000, "period": "2026-01"})
-    assert r.status_code == 200
-    income_id = r.json()["id"]
-
-    r = client.get("/api/income?period=2026-01", headers=_auth(token))
-    assert len(r.json()) == 1
-    r = client.get("/api/income?period=2026-02", headers=_auth(token))
-    assert len(r.json()) == 0
-
-    r = client.put(f"/api/income/{income_id}", headers=_auth(token), json={"amount": 3200})
-    assert r.json()["amount"] == 3200
-
-    r = client.delete(f"/api/income/{income_id}", headers=_auth(token))
-    assert r.status_code == 200
 
 
 def test_category_tag_round_trips():
@@ -137,37 +118,17 @@ def test_import_spreadsheet_populates_everything():
     body = r.json()
     assert body["period"] == "2026-01"
     assert body["categories_created"] == 2
-    assert body["income_rows"] == 2
 
     r = client.get("/api/budget?period=2026-01", headers=_auth(token))
     names = {c["name"]: c for c in r.json()}
     assert names["Mancare in oras"]["total"] == 996.97
     assert names["Mancare in oras"]["tag"] == "Wants"
 
-    r = client.get("/api/income?period=2026-01", headers=_auth(token))
-    assert {i["name"] for i in r.json()} == {"Cash", "ING"}
-
-    r = client.get("/api/me", headers=_auth(token))
-    assert r.json()["wants_goal_pct"] == 60.0
-
-
-def test_budget_goals_actual_pct_matches_spreadsheet_math():
-    # Real Jan 2026 sheet: Wants spend 2.282,43 / TOTAL INCOME 3.365,00 = 67,83%,
-    # the exact ACTUAL row in that sheet - actual % is a share of income, not
-    # of total spend.
-    token = _signup("goalsmath@example.com")
-    client.post("/api/income", headers=_auth(token), json={"name": "Cash", "amount": 3365.00, "period": "2026-01"})
-    client.post("/api/budget/categories", headers=_auth(token), json={"name": "Dining", "tag": "Wants"})
-    categories = {c["name"]: c["id"] for c in client.get("/api/budget?period=2026-01", headers=_auth(token)).json()}
-    client.post(
-        "/api/expenses",
-        headers=_auth(token),
-        json={"amount": 2282.43, "category_id": categories["Dining"], "date": "2026-01-15"},
-    )
-
-    r = client.get("/api/budget/goals?period=2026-01", headers=_auth(token))
-    wants = next(g for g in r.json() if g["tag"] == "Wants")
-    assert wants["actual_pct"] == 67.83
+    # The sheet's income column and GOALS block are stepped over rather than
+    # imported, and stepping over them must not disturb the spending rows: what
+    # the file adds on top of the starter set is exactly its two spending rows.
+    starter = {name for name, _ in starter_categories("en")}
+    assert set(names) - starter == {"Mancare in oras", "Supermarket"}
 
 
 def test_reimporting_same_period_replaces_not_duplicates():
@@ -179,9 +140,6 @@ def test_reimporting_same_period_replaces_not_duplicates():
     r = client.get("/api/budget?period=2026-01", headers=_auth(token))
     names = {c["name"]: c for c in r.json()}
     assert names["Mancare in oras"]["total"] == 996.97  # not doubled
-
-    r = client.get("/api/income?period=2026-01", headers=_auth(token))
-    assert len(r.json()) == 2  # not doubled
 
 
 def test_recategorising_moves_the_auto_label_but_keeps_a_real_note():
@@ -222,3 +180,99 @@ def test_recategorising_moves_the_auto_label_but_keeps_a_real_note():
     back = client.put(f"/api/expenses/{drifted['id']}", headers=_auth(token),
                       json={"category_id": cats["id"]}).json()
     assert back["note"] == "Groceries"
+
+
+# --- One address, one account -------------------------------------------
+# Signup and login used to compare the address exactly while social sign-in
+# compared it case-insensitively, so Alex@example.com and alex@example.com
+# could become two accounts with two separate budgets.
+
+
+def test_an_address_is_the_same_account_whatever_its_case():
+    first = client.post("/api/auth/signup", json={"email": "Case@Example.com", "password": "hunter2222"})
+    assert first.status_code == 200
+
+    again = client.post("/api/auth/signup", json={"email": "case@example.com", "password": "different999"})
+    assert again.status_code == 400
+    assert "already exists" in again.json()["detail"]
+
+
+def test_login_and_reset_accept_the_address_in_any_case():
+    client.post("/api/auth/signup", json={"email": "mixed@example.com", "password": "hunter2222"})
+
+    # The capitals a phone keyboard adds on its own must not lock anyone out.
+    for typed in ("mixed@example.com", "Mixed@Example.com", "MIXED@EXAMPLE.COM"):
+        login = client.post("/api/auth/login", json={"email": typed, "password": "hunter2222"})
+        assert login.status_code == 200, typed
+        assert login.json()["access_token"]
+
+    asked = client.post("/api/auth/forgot-password", json={"email": "MIXED@example.com"})
+    assert asked.status_code == 200
+
+
+def test_the_stored_address_is_canonical():
+    token = _signup("Canonical@Example.COM")
+    me = client.get("/api/me", headers=_auth(token)).json()
+    assert me["email"] == "canonical@example.com"
+
+
+# --- Signing up lands you in the app ------------------------------------
+# This used to be a four-question quiz about how you spend your weekends,
+# answered before you had seen the app, to pick categories you can change in
+# two taps. New accounts now start with a usable set straight away.
+
+
+def test_signing_up_gives_a_usable_set_of_categories():
+    token = _signup("starter@example.com")
+    names = [c["name"] for c in client.get("/api/budget", headers=_auth(token)).json()]
+    assert names == [name for name, _ in starter_categories("en")]
+    assert "Other" in names  # the importer's catch-all has to exist
+    assert all(c["icon"] for c in client.get("/api/budget", headers=_auth(token)).json())
+
+
+def test_the_starter_set_follows_the_signup_language():
+    r = client.post("/api/auth/signup", json={"email": "ro@example.com", "password": "hunter2222", "lang": "ro"})
+    token = r.json()["access_token"]
+    names = {c["name"] for c in client.get("/api/budget", headers=_auth(token)).json()}
+    assert "Alimente" in names and "Altele" in names
+    assert "Groceries" not in names
+
+
+def test_an_unknown_language_still_signs_up():
+    r = client.post("/api/auth/signup", json={"email": "xx@example.com", "password": "hunter2222", "lang": "xx"})
+    assert r.status_code == 200
+    names = {c["name"] for c in client.get("/api/budget", headers=_auth(r.json()["access_token"])).json()}
+    assert "Other" in names
+
+
+def test_the_quiz_is_gone():
+    assert client.get("/api/quiz").status_code == 404
+    token = _signup("noquiz@example.com")
+    assert client.post("/api/onboarding/complete", headers=_auth(token),
+                       json={"answers": {}, "lang": "en"}).status_code == 404
+
+
+def test_an_account_left_half_set_up_is_topped_up_on_its_next_visit():
+    """
+    Accounts created before the quiz was dropped can be sitting on the single
+    fallback category it gave them at signup, with no quiz left to finish.
+    """
+    token = _signup("halfway@example.com")
+    db = TestingSessionLocal()
+    try:
+        user = db.query(User).filter(User.email == "halfway@example.com").first()
+        db.query(BudgetCategory).filter(
+            BudgetCategory.user_id == user.id, BudgetCategory.name != "Other"
+        ).delete(synchronize_session=False)
+        user.onboarded = False
+        db.commit()
+    finally:
+        db.close()
+
+    assert len(client.get("/api/budget", headers=_auth(token)).json()) == 1
+
+    client.get("/api/me?lang=ro", headers=_auth(token))
+
+    names = {c["name"] for c in client.get("/api/budget", headers=_auth(token)).json()}
+    assert "Alimente" in names
+    assert len([n for n in names if n in ("Other", "Altele")]) == 1  # no duplicate catch-all

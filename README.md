@@ -11,15 +11,14 @@ drill-down category view and three bottom sheets — replacing v0's amber
 free date ranges to back the new screens. See
 **[The app](#the-app)** below.
 
-- `app/parser.py` — turns free text ("50 groceries", "spent 30 on lunch", "12,50 lei cafea") into an amount + category. 11 tests, all passing, including European comma-decimals.
-- `app/api.py` — the app's auth, expense, budget, income and quiz endpoints (see below).
-- `app/auth.py` — email/password accounts with JWT tokens, plus OTP helpers (login 2FA, password reset).
+- `app/api.py` — the app's auth, expense and budget endpoints (see below).
+- `app/auth.py` — email/password accounts with JWT tokens, plus the OTP helpers behind password reset.
 - `app/oauth.py` — Google / Apple / GitHub sign-in as a second identity path onto the same User rows, matched on verified email. Server-side authorization-code flow, since a static frontend can't hold a client secret. Every provider is optional and self-configuring from environment variables — see setup below.
 - `app/email_sender.py` — sends OTP codes via [Resend](https://resend.com); if `RESEND_API_KEY` isn't set, it logs the email (and code) to the console instead of failing, so the whole flow is testable locally with no account needed.
-- `app/quiz.py` — the signup personality quiz: 4 questions map to tag-weighted scores over a category pool, picking 5 starting budget categories tailored to the answers instead of one generic fixed set.
+- `app/starter.py` — the categories a new account opens with, worded in the signup language. This replaced a four-question personality quiz: it was answered once, by someone who had not seen the app yet, to decide something they can change in two taps.
 - `app/gocardless.py` — client for GoCardless Bank Account Data, the open-banking (PSD2) provider the Revolut import runs on. Token minting, the consent round trip, accounts and transactions. Optional: with no credentials set, the bank panel stays hidden and everything else behaves exactly as before.
 - `app/categorizer.py` — turns a noisy bank description ("CARD PAYMENT TO LIDL 0412 BUCURESTI") into a merchant key, then into one of *your* categories, via learned rules first, a built-in table of Romanian merchants second, and the card network's MCC last. Returns nothing rather than guessing.
-- `app/bank_sync.py` — the sync loop: dedupe, skip income and transfers, convert currencies, file what it is sure of and park the rest in a confirm inbox.
+- `app/bank_sync.py` — the sync loop: dedupe, drop money coming in and the bank's own transfers, convert currencies, file what it is sure of and park the rest in a confirm inbox.
 - `app/bank_api.py` — the bank endpoints, including the one the bank's own redirect lands on.
 - `app/models.py` / `app/database.py` — SQLite locally, Postgres in production via `DATABASE_URL`; nothing else changes between the two. `ensure_columns` in `database.py` adds columns a database created by an earlier deploy is missing, since `create_all` only ever creates whole tables and there's no Alembic setup here. The engine uses `pool_pre_ping` — see [Why the pool pings](#why-the-pool-pings) for the failure it prevents.
 - `web/privacy.html` / `web/terms.html` — the privacy policy and terms, written against what the app actually does rather than boilerplate. Plain static pages sharing `style.css`, so they follow the app's chosen theme; linked from the foot of the login screen.
@@ -31,16 +30,16 @@ free date ranges to back the new screens. See
 `web/` is five tabs, a drill-down and three bottom sheets, all rendered from
 one state object in a single pass — so adding or deleting an expense updates
 the hero total, day-group totals, donut segments, percentage badges, budget
-bars, goal split and the chart together, and nothing on screen can disagree
+bars and the chart together, and nothing on screen can disagree
 with anything else.
 
 | Tab | What it shows |
 | --- | --- |
 | **Activity** | Period total and its change from the previous period, a spend-per-day bar chart with an average line, filter pills, and transactions grouped by day. The search pill filters live on name and category. |
 | **Summary** | A donut of the period's spend, and the categories ranked by amount with their share as a percentage. Tapping one drills into a single-category ring. |
-| **Budget** | Spend against `of $X planned · day N of M`, the Wants/Needs/Savings goal split, and a progress bar per category that turns red past its target. |
+| **Budget** | Spend against `of $X planned · day N of M`, and a progress bar per category that turns red past its target. |
 | **Analytics** | Spend over time as bars, with that range's transactions below it. Unlike the other tabs it starts with **no** period filter — all time, from the earliest expense to now — and keeps its own period selection, so narrowing Analytics doesn't move Activity or Budget with it. |
-| **Profile** | Your identity, five stat cells from `/api/me/stats`, settings, and log out. |
+| **Profile** | Your identity, four stat cells from `/api/me/stats`, settings, and log out. |
 
 The floating **+** opens a keypad sheet that logs an expense; tapping a
 transaction opens a sheet with its date and category, and a delete.
@@ -58,12 +57,11 @@ own zone, set from Profile → Settings → Time zone (which offers the browser'
 detected zone in one tap). Unset means UTC.
 
 This matters more than it sounds. The app previously mixed two clocks: expenses
-were stamped with `datetime.utcnow()` while streaks, "this month" and default
+were stamped with `datetime.utcnow()` while "this month" and default
 periods used `date.today()` — the *server's* local date. Those agree only when
 the server and the user are both on UTC. For a user at UTC+3, everything logged
-between midnight and 03:00 was filed to the previous day, so the streak read
-zero right after logging something, and an expense added just after midnight on
-the 1st landed in the previous month. `app/api.py` now has no bare
+between midnight and 03:00 was filed to the previous day, so an expense
+added just after midnight on the 1st landed in the previous month. `app/api.py` now has no bare
 `date.today()`: `today_for(user)`, `local_date()` and `_utc_window()` do the
 conversion, the last one because a calendar day in a user's zone is a UTC window
 shifted by the offset, which is what the queries actually filter on. A stale or
@@ -89,25 +87,19 @@ password, not an expired session, so `apiFetch` takes a `credentialCheck` flag
 that suppresses its usual log-out-and-bounce behaviour — without it a typo
 threw the user out of the app.
 
-**Categories, income and profile** are edited from rows in Profile →
-Settings, since the design covers the five tabs but not the management
-screens they need. **Theme** (dark/light/system) and **language** (EN/ES/FR/RO)
-are local settings; **currency** and **two-factor** are stored on the account.
+**Categories and profile** are edited from rows in Profile → Settings,
+since the design covers the five tabs but not the management screens they
+need. **Theme** (dark/light/system) and **language** (EN/ES/FR/RO) are local
+settings; **currency** is stored on the account.
 
 **Where this deviates from the design handoff**, deliberately:
 
 - Spending *more* than the previous period shows the delta in red with an up
   arrow, not the design's green. The design only illustrates a decrease, and
   reusing its green for an increase would read as good news.
-- Goal-split actuals are each tag's share of the period's **income**, not of
-  its spend, which is what `GET /api/budget/goals` computes and what the
-  source spreadsheets do (see the docstring there).
 - The Summary list only shows categories with spend in the period — it's a
   spend ranking, and a category at zero has no donut segment. Categories with
   no spend still appear on Budget, where their target is the point.
-- The `Income` toggle switches to Activity and lists that period's income
-  rows. Income is month-keyed with no categories, so the donut and the daily
-  chart have nothing to draw from it.
 - Category colours are assigned client-side from the design's eight-colour
   palette rather than stored per category, keyed on the category's name and
   de-duplicated so no two categories share one.
@@ -121,37 +113,31 @@ uvicorn app.main:app --reload
 
 Then visit `http://localhost:8000` — you should see `{"status": "running"}`.
 
-Visit `http://localhost:8000/app/` for the PWA: sign up, answer the 4-question onboarding quiz, and you land on a budget already set up with categories that fit you.
+Visit `http://localhost:8000/app/` for the PWA: sign up and you land straight on a budget, with a starter set of categories already there to rename, retarget or delete.
 
 On a phone, open that same URL in the browser and use "Add to Home Screen" (Safari) or the install prompt (Chrome) to install it like an app.
 
 ### App account endpoints
 
-- `POST /api/auth/signup` / `POST /api/auth/login` — `{"email": ..., "password": ...}`. Login returns either a JWT directly, or `{"requires_otp": true}` if the account has 2FA on (see below).
-- `POST /api/auth/verify-otp` — `{"email": ..., "code": ...}`, exchanges a login OTP for a JWT.
+- `POST /api/auth/signup` / `POST /api/auth/login` — `{"email": ..., "password": ...}`, returning a JWT. Signup also takes `lang`, which decides the wording of the starter categories it creates. The address is matched and stored case-insensitively, so one address is always one account.
 - `POST /api/auth/forgot-password` — `{"email": ...}`, emails a reset code. Always returns `{"sent": true}` regardless of whether the email exists, so this can't be used to check who has an account.
 - `POST /api/auth/reset-password` — `{"email": ..., "code": ..., "new_password": ...}`.
-- `PUT /api/me/two-factor` — `{"enabled": true|false}` (needs `Authorization: Bearer <token>`). When on, every login emails a 6-digit code that has to be verified before a JWT is issued.
-- `GET /api/me` — current user, including `two_factor_enabled`, `onboarded`, `oauth_provider` and `has_password`.
-- `DELETE /api/me` — erases the account and everything belonging to it (expenses, categories, income, OTP codes), in one transaction. An account with a password must re-send it in the body: a 30-day bearer token sitting in browser storage is too weak a proof for something irreversible. A social-only account has no password to ask for and deletes on the token alone.
+- `GET /api/me` — current user, including `oauth_provider` and `has_password`. Takes an optional `lang`, used only to top up an account left half-set-up by the signup quiz this replaced.
+- `DELETE /api/me` — erases the account and everything belonging to it (expenses, categories, OTP codes), in one transaction. An account with a password must re-send it in the body: a 30-day bearer token sitting in browser storage is too weak a proof for something irreversible. A social-only account has no password to ask for and deletes on the token alone.
 - `GET /api/auth/providers` — which social sign-in buttons the login screen should draw. Empty until credentials are configured (see below).
 - `GET /api/auth/oauth/{provider}/start?redirect_uri=...` → 302 to Google/Apple/GitHub; `GET|POST /api/auth/oauth/{provider}/callback` → 302 back to `redirect_uri` with the app JWT in the URL fragment (`#token=...`), or `#oauth_error=...`.
-- `GET /api/quiz` — the onboarding quiz's questions/options (text only — the tag weights used for scoring stay server-side).
-- `POST /api/onboarding/complete` — `{"answers": {"weekend": "food", ...}}`, replaces the signup-time placeholder category with the 5 quiz-picked ones and marks the account onboarded.
 - `GET /api/budget` — this user's budget categories and running totals for the period.
-- `GET /api/budget`, `GET /api/budget/goals` and `GET /api/expenses` also take `start` and `end` (`YYYY-MM-DD`, inclusive, given together) instead of `period`, for the ranges the app's period sheet offers that a single month can't express.
+- `GET /api/budget` and `GET /api/expenses` also take `start` and `end` (`YYYY-MM-DD`, inclusive, given together) instead of `period`, for the ranges the app's period sheet offers that a single month can't express.
 - `PUT /api/me/timezone` — `{"timezone": "Europe/Bucharest"}`, an IANA name, or `""` for UTC. Validated against the system zone database; an unknown name is a 400.
 - `PUT /api/me/profile` — `{"display_name": ..., "avatar_url": ...}`, a small (<500KB) `data:image/...` URL for the profile picture.
-- `GET /api/me/stats` — total spent, this month's total, monthly average, top category, current daily streak, member-since date — the numbers behind the Profile screen.
-- `PUT /api/me/goals` / `GET /api/budget/goals` — the Wants/Needs/Savings target split (must sum to 100%) and, per period, the actual split computed from tagged categories' spend — the app's version of a spreadsheet's GOALS/ACTUAL block.
-- `GET/POST/PUT/DELETE /api/income` — named income lines for a period (`?period=YYYY-MM`), mirroring a spreadsheet's INCOME column.
-- `POST /api/import/spreadsheet` — upload (`multipart/form-data`) an `.xlsx`/`.csv` export shaped like a personal budget sheet (two parallel INCOME / SPENDINGS+tag tables, plus an optional GOALS block); populates categories (with Needs/Wants/Savings tags), that period's expenses, income rows, and the goal split in one call. Re-importing the same period replaces rather than duplicates. See `app/importer.py` for the parsing rules.
+- `GET /api/me/stats` — total spent, this month's total, monthly average, top category, member-since date — the numbers behind the Profile screen.
+- `POST /api/import/spreadsheet` — upload (`multipart/form-data`) an `.xlsx`/`.csv` export shaped like a personal budget sheet (two parallel INCOME / SPENDINGS+tag tables, plus an optional GOALS block); populates categories (with Needs/Wants/Savings tags) and that period's expenses. The sheet's income column and GOALS block are recognised and stepped over rather than imported — recognising them is what keeps their rows from being read as spending. Re-importing the same period replaces rather than duplicates. See `app/importer.py` for the parsing rules.
 
 ### Setting up social sign-in (optional)
 
 Google, Apple and GitHub are a second way into the same accounts, alongside email/password. Each is independent: a provider's button only appears once its credentials are in the environment, and a deploy with none of them configured behaves exactly as it did before.
 
-The flow is server-side authorization code, not a browser-side implicit grant — the frontend is a static bundle on GitHub Pages and can't hold a client secret, so the backend does the exchange and hands back its own JWT. Accounts are matched on **verified** email, so signing in with Google to an address that already has a password gets that same account, not a second one. New social accounts get no password and still run the onboarding quiz.
+The flow is server-side authorization code, not a browser-side implicit grant — the frontend is a static bundle on GitHub Pages and can't hold a client secret, so the backend does the exchange and hands back its own JWT. Accounts are matched on **verified** email, so signing in with Google to an address that already has a password gets that same account, not a second one. New social accounts get no password and land in the app with the English starter categories, which can be renamed like any other.
 
 Two environment variables apply to all providers:
 
@@ -182,8 +168,8 @@ Apple is the odd one out twice over: it has no static client secret (one is mint
 
 Both live providers were tested by signing out and back in on the deployed
 app: each lands on the **existing** account matched by email rather than
-creating a second one, leaving expenses, currency, `onboarded` and a
-user-set display name untouched. That matching is the part worth re-testing
+creating a second one, leaving expenses, currency and a user-set display
+name untouched. That matching is the part worth re-testing
 if the flow is ever changed — getting it wrong silently orphans every
 expense behind a duplicate account.
 
@@ -300,8 +286,8 @@ npx playwright test
 
 [Playwright](https://playwright.dev) drives a real browser against the real
 FastAPI app, which serves the real PWA at `/app` - nothing is mocked, because
-the point is to catch the wiring between the two. It covers signup through the
-onboarding quiz, wrong credentials, both settings of "Save my login info",
+the point is to catch the wiring between the two. It covers signup straight
+into the app, wrong credentials, both settings of "Save my login info",
 `9 lei` versus `$9`, Analytics opening on All time and keeping its period
 separate from the other tabs, the privacy and terms links, and the whole
 delete-account flow including that a wrong password does **not** end the
@@ -430,10 +416,6 @@ Three things that will bite you if you don't know them:
   duplicated off (the Apr, Jun and Jul 2026 files all say "May Budget
   Tracker" internally). Keep the filename right and ignore the title, or pass
   `period` explicitly in the form.
-- **Import oldest-first.** A month whose sheet has no GOALS block leaves the
-  goal split at whatever the previous import set (Aug 2026 is one of these).
-  Chronological order means the most recent month with goals wins, which is
-  what you want.
 - **`"X has no amount - skipped"` warnings are usually correct.** These
   spreadsheets are hand-edited and genuinely have blank amount cells
   (Parcari, Vodafone and Cadouri in various months). The importer skips the
@@ -442,7 +424,7 @@ Three things that will bite you if you don't know them:
 Re-importing the same period replaces that period's previous import rather
 than doubling it, so a corrected sheet can just be uploaded again. Worth
 checking after an import: each month's total in the app should equal its
-sheet's own `TOTAL EXPENSES` / `TOTAL INCOME` cells.
+sheet's own `TOTAL EXPENSES` cell.
 
 ## Deploying the frontend to GitHub Pages
 

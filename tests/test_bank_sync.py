@@ -575,3 +575,42 @@ def test_the_bank_panel_is_hidden_when_the_server_has_no_credentials(monkeypatch
 
     body = client.get("/api/bank/status", headers=_auth(token)).json()
     assert body["configured"] is False
+
+
+def test_money_leaving_the_account_is_never_dropped_silently(db, monkeypatch):
+    """
+    "The Exchange" is a pub and "ATM Cafe" is a cafe. Both used to be dropped
+    as transfers, and a dropped row is invisible - not an expense, not in the
+    inbox - so a real payment disappeared with nothing to show for it.
+
+    What matters is not which side it lands on (the cafe is recognised and
+    filed, the pub is not and waits) but that neither vanishes.
+    """
+    token = _signup("sync-ambiguous@example.com")
+    _category(token, "Restaurant")
+    connection = _link(db, token)
+
+    monkeypatch.setattr(
+        gocardless,
+        "fetch_transactions",
+        lambda account_id, date_from=None: [
+            _tx("amb1", -48.0, "CARD PAYMENT TO THE EXCHANGE PUB"),
+            _tx("amb2", -16.5, "CARD PAYMENT TO ATM CAFE"),
+            # Still certain, still dropped: no shop is called "Top-Up".
+            _tx("amb3", -200.0, "Top-Up by *4321"),
+        ],
+    )
+
+    summary = bank_sync.sync_connection(db, connection)
+    assert summary.skipped == 1
+    assert summary.imported + summary.pending == 2
+
+    rows = (
+        db.query(BankTransaction)
+        .filter(BankTransaction.user_id == connection.user_id)
+        .all()
+    )
+    visible = {row.external_id: row.status for row in rows}
+    assert visible["amb1"] != "skipped"
+    assert visible["amb2"] != "skipped"
+    assert visible["amb3"] == "skipped"

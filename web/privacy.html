@@ -51,7 +51,7 @@
     <li>If you set a password, only a <strong>bcrypt hash</strong> of it. The password itself is never stored and cannot be recovered from the hash.</li>
     <li>If you sign in with Google or GitHub, the <strong>provider name and the user ID that provider assigns you</strong>, so a later sign-in resolves to the same account.</li>
     <li>An optional <strong>display name</strong> and <strong>profile picture</strong>. The picture is stored directly in the database as an embedded image, not on a separate image host.</li>
-    <li>Your <strong>currency</strong> preference and whether two-factor login is switched on.</li>
+    <li>Your <strong>currency</strong> preference.</li>
   </ul>
 
   <h3>What you record</h3>
@@ -63,7 +63,7 @@
 
   <h3>Sign-in codes</h3>
   <p>
-    If two-factor login or a password reset is used, a six-digit code is
+    If a password reset is used, a six-digit code is
     emailed to you and stored <strong>hashed</strong>, with an expiry, and
     marked used once redeemed.
   </p>
@@ -99,7 +99,7 @@
     <li><strong>Render</strong> — hosts the server and the database where your data lives.</li>
     <li><strong>GitHub Pages</strong> — serves the app's static files. It receives ordinary web-server request data, not your account contents.</li>
     <li><strong>Google or GitHub</strong> — only if you choose to sign in with them. They confirm your verified email address and basic profile to this app. This app requests nothing else: it cannot read your Google Drive, Gmail, or your GitHub repositories.</li>
-    <li><strong>Resend</strong> — only to deliver two-factor and password-reset emails, and only if email sending is configured.</li>
+    <li><strong>Resend</strong> — only to deliver password-reset emails, and only if email sending is configured.</li>
   </ul>
   <p>Your data is not sold, rented, or given to anyone else.</p>
 

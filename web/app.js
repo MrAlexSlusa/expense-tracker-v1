@@ -36,20 +36,28 @@ const RATE_NAMES = { EUR: "Euro", USD: "US Dollar", GBP: "British Pound", BTC: "
 
 const LANGUAGES = [["en", "English"], ["es", "Español"], ["fr", "Français"], ["ro", "Română"]];
 
-// The eight category colours from the design, keyed by the names the
-// onboarding quiz can produce. Anything else falls back to the same palette
-// picked by a hash of the name, so a category's colour is stable across
-// reloads without needing a column in the database for it.
+// The eight category colours from the design, keyed by the names an account
+// is likely to carry: the starter set in each of the four languages (see
+// app/starter.py) plus the English names older accounts were created with.
+// Anything else falls back to the same palette picked by a hash of the name,
+// so a category's colour is stable across reloads without needing a column in
+// the database for it.
 const PALETTE = ["#4353ff", "#f2295b", "#2f6bff", "#f5c542", "#ff4f8b", "#8b5cf6", "#ff8a3d", "#22c8c8"];
 const CATEGORY_COLORS = {
   housing: "#4353ff", rent: "#4353ff", "rent & utilities": "#4353ff",
-  groceries: "#f2295b",
+  "home & bills": "#4353ff", "casa si facturi": "#4353ff",
+  "casa y facturas": "#4353ff", "maison et factures": "#4353ff",
+  groceries: "#f2295b", alimente: "#f2295b", supermercado: "#f2295b", courses: "#f2295b",
   food: "#2f6bff", "dining out": "#2f6bff", "coffee & snacks": "#2f6bff",
+  "eating out": "#2f6bff", "mancare in oras": "#2f6bff",
+  "comer fuera": "#2f6bff", restaurants: "#2f6bff",
   utilities: "#f5c542", "family & kids": "#f5c542", education: "#f5c542",
   shopping: "#ff4f8b", "gadgets & tech": "#ff4f8b",
   transport: "#8b5cf6", transportation: "#8b5cf6", travel: "#8b5cf6",
+  transporte: "#8b5cf6",
   health: "#ff8a3d", "fitness & health": "#ff8a3d", pets: "#ff8a3d",
   entertainment: "#22c8c8", subscriptions: "#22c8c8", "nightlife & fun": "#22c8c8",
+  abonamente: "#22c8c8", suscripciones: "#22c8c8", abonnements: "#22c8c8",
   "savings & investing": "#32d583", "gifts & donations": "#32d583",
 };
 
@@ -113,7 +121,6 @@ const EMOJI_LIBRARY = [
 // The category-guessing fallback still wants a plain list.
 const EMOJI_CHOICES = EMOJI_LIBRARY.map(([emoji]) => emoji);
 
-const GOAL_COLORS = { Wants: "#f5c542", Needs: "#4353ff", Savings: "#32d583" };
 const OVER_BUDGET_COLOR = "#f2295b";
 const RING_DIM = "#2b3350";
 const DONUT_RADIUS = 118;
@@ -140,7 +147,6 @@ const state = {
   // by nature; Analytics is the one that's meant to look across all of it.
   analyticsPeriod: null,
   anchor: new Date(), // the day/week/month/year the chosen period is centred on
-  kind: "Expenses",
   selCat: null, // category id driving the detail ring
   sheet: null,
   searchOpen: false,
@@ -174,8 +180,6 @@ const data = {
   stats: null,
   categories: [],
   expenses: [],
-  income: [],
-  goals: [],
   prevTotal: null, // same-length previous range, for the "x% from ..." delta
   analyticsBuckets: null, // lazily loaded, only the Analytics tab needs it
   analyticsExpenses: null, // the rows behind those buckets, for Analytics' own list
@@ -756,10 +760,6 @@ function rangeTotal() {
   return data.expenses.reduce((sum, e) => sum + e.amount, 0);
 }
 
-function incomeTotal() {
-  return data.income.reduce((sum, i) => sum + i.amount, 0);
-}
-
 function deltaInfo() {
   const previous = data.prevTotal;
   if (previous == null || previous <= 0) return null;
@@ -841,16 +841,6 @@ function transactionRows() {
     });
   });
   return rows;
-}
-
-function incomeRows() {
-  return data.income
-    .filter((i) => !state.q.trim() || i.name.toLowerCase().includes(state.q.trim().toLowerCase()))
-    .map((i, index, all) => ({
-      income: i,
-      radius: all.length === 1 ? "r-single" : index === 0 ? "r-first" : index === all.length - 1 ? "r-last" : "r-mid",
-      divider: index > 0,
-    }));
 }
 
 // One bar per day while the range is short enough to read; longer ranges
@@ -964,8 +954,6 @@ function pillsHtml(options) {
       : `<button class="pill pill-icon" data-action="open-search" aria-label="${esc(t("search"))}"><span></span></button>`);
   }
 
-  parts.push(`<button class="pill" data-action="toggle-kind">${esc(t(state.kind === "Income" ? "income" : "expenses"))}</button>`);
-
   // Only screens without a period button in their hero carry one here: on
   // Activity and Budget the hero already says "September ⌄", and a second
   // control for the same choice a few pixels below it is clutter, not a
@@ -1021,19 +1009,6 @@ function txRowHtml(row) {
 }
 
 function transactionListHtml() {
-  if (state.kind === "Income") {
-    const rows = incomeRows();
-    if (!rows.length) {
-      return `<div class="list-region" id="tx-list"><p class="empty-note">${esc(t("noIncomeYet"))}</p></div>`;
-    }
-    return `<div class="list-region" id="tx-list"><div style="margin-top:18px"></div>${rows.map((row) => `
-      <button class="tx-row ${row.radius} ${row.divider ? "has-divider" : ""}" data-action="open-income" data-id="${row.income.id}">
-        <span class="tile">💵</span>
-        <span class="tx-name">${esc(row.income.name)}</span>
-        <span class="tx-amount">${esc(fmt(row.income.amount))}</span>
-      </button>`).join("")}</div>`;
-  }
-
   const rows = transactionRows();
   if (!rows.length) {
     // A search that found nothing is a dead end you back out of; an empty
@@ -1056,15 +1031,15 @@ function transactionListHtml() {
 // --- the six screens -----------------------------------------------------
 
 function activityView() {
-  const total = state.kind === "Income" ? incomeTotal() : rangeTotal();
+  const total = rangeTotal();
   return `
     <div class="view">
       <div class="hero">
         <button class="hero-period-btn" data-action="open-period">${esc(rangeLabel(state.period, currentRange()))} ⌄</button>
         <div class="hero-amount" data-count="${total}" data-count-key="hero">${esc(fmt(total))}</div>
-        ${state.kind === "Income" ? "" : deltaHtml()}
+        ${deltaHtml()}
       </div>
-      ${state.kind === "Income" ? "" : chartBlock(spendSeries(), { roundScale: false })}
+      ${chartBlock(spendSeries(), { roundScale: false })}
       ${pillsHtml({ search: true, categories: true })}
       ${transactionListHtml()}
     </div>`;
@@ -1152,18 +1127,6 @@ function budgetView() {
   today.setHours(0, 0, 0, 0);
   const elapsed = Math.min(Math.max(daysBetween(range.start, today), 1), span);
 
-  const goals = ["Wants", "Needs", "Savings"].map((tag) => {
-    const goal = data.goals.find((g) => g.tag === tag) || { target_pct: 0, actual_pct: 0 };
-    return `
-      <div>
-        <div class="goal-head">
-          <span>${esc(t(tag.toLowerCase()))}</span>
-          <span>${esc(t("ofTargetPct", { actual: Math.round(goal.actual_pct), target: Math.round(goal.target_pct) }))}</span>
-        </div>
-        <div class="track"><i data-morph="goal-${tag}" style="width:${Math.min(goal.actual_pct, 100).toFixed(1)}%;background:${GOAL_COLORS[tag]}"></i></div>
-      </div>`;
-  }).join("");
-
   const rows = cats.map((c) => {
     const target = c.target || 0;
     const over = target > 0 && c.total > target;
@@ -1185,11 +1148,6 @@ function budgetView() {
         <button class="hero-period-btn" data-action="open-period">${esc(rangeLabel(state.period, range))} ⌄</button>
         <div class="hero-amount-sm" data-count="${total}" data-count-key="hero-sm">${esc(fmt(total))}</div>
         <div class="hero-caption">${esc(t("plannedAndDay", { planned: fmt(planned), day: elapsed, days: span }))}</div>
-      </div>
-
-      <div class="goal-card">
-        <span class="caption">${esc(t("goalSplit"))}</span>
-        <div class="goal-list">${goals}</div>
       </div>
 
       ${cats.length ? `<div class="card">${rows}</div>` : `<p class="empty-note">${esc(t("noCategoriesYet"))}</p>`}
@@ -1366,7 +1324,6 @@ function profileView() {
     [fmt(stats.total_this_month || 0), t("statThisMonth")],
     [fmt(stats.monthly_average || 0), t("statMonthlyAverage")],
     [stats.top_category || "—", t("statTopCategory")],
-    [t("nDays", { n: stats.current_streak_days || 0 }), t("statStreak")],
   ].map(([value, label]) => `
     <div class="stat-cell">
       <div class="stat-value">${esc(value)}</div>
@@ -1380,9 +1337,7 @@ function profileView() {
     ["open-timezone", t("timeZone"), me.timezone || t("timeZoneUtc")],
     ["open-theme", t("theme"), t(settings.theme)],
     ["toggle-sound", t("soundsHaptics"), t(soundOn() ? "on" : "off")],
-    ["open-twofactor", t("twoFactor"), t(me.two_factor_enabled ? "on" : "off")],
     ["open-categories", t("categories"), String(data.categories.length)],
-    ["open-income", t("income"), periodOf(currentRange().start)],
     ["open-import", t("importSpreadsheet"), ".xlsx / .csv"],
     // Only once the server has bank sync configured. A row that exists just
     // to say the feature is unavailable is worse than no row at all.
@@ -1729,17 +1684,31 @@ function addSheet() {
   const converted = `<div class="keypad-converted">${esc(convertedPreview())}</div>`;
 
   const editing = state.editTxId != null;
-  // Only a correction shows the date: when logging, the date is now, and a
-  // field saying so is one more thing to read past on the way to the keypad.
-  const dateRow = editing
-    ? `<div class="date-row">
-         <span>${esc(t("date"))}</span>
-         <input id="add-date" type="date" value="${esc(state.addDate || "")}" />
-       </div>`
-    : "";
+  // The date is always here, logging or correcting. A payment is often typed
+  // in the evening, or the next morning, and a keypad that can only ever mean
+  // "now" forces a save-then-edit round trip to say so.
+  //
+  // Today and yesterday are chips because they cover almost every case in one
+  // tap; the native picker beside them handles the rest without a calendar of
+  // our own to maintain.
+  const today = isoDate(new Date());
+  const yesterday = isoDate(new Date(Date.now() - 86400000));
+  const chosen = state.addDate || today;
+  const dateChips = [[today, t("today")], [yesterday, t("yesterday")]]
+    .map(([value, label]) => `
+      <button class="date-chip ${chosen === value ? "is-selected" : ""}"
+        data-action="set-add-date" data-value="${esc(value)}">${esc(label)}</button>`).join("");
+  const dateRow = `
+    <div class="date-row">
+      <span>${esc(t("date"))}</span>
+      <div class="date-chip-row">
+        ${dateChips}
+        <input id="add-date" type="date" value="${esc(chosen)}" />
+      </div>
+    </div>`;
 
   return sheetShell(`
-    <div class="sheet-caption">${esc(editing ? t("editExpense") : t("enterAmount"))}</div>
+    <div class="sheet-title">${esc(editing ? t("editExpense") : t("newExpense"))}</div>
     <div class="keypad-amount ${state.amount ? "" : "is-empty"}">${esc(withCurrencyIn(state.amount || "0", active))}</div>
     ${converted}
     <div class="cur-chip-row">${currencyChips}</div>
@@ -1867,17 +1836,6 @@ function themeSheet() {
     })))}`);
 }
 
-function twoFactorSheet() {
-  const on = !!(data.me && data.me.two_factor_enabled);
-  return sheetShell(`
-    <div class="sheet-title">${esc(t("twoFactor"))}</div>
-    <p class="sheet-hint">${esc(t("twoFactorHint"))}</p>
-    ${optionCard([
-      { action: "set-twofactor", value: "on", label: t("on"), selected: on },
-      { action: "set-twofactor", value: "off", label: t("off"), selected: !on },
-    ])}`);
-}
-
 function importSheet() {
   return sheetShell(`
     <div class="sheet-title">${esc(t("importSpreadsheet"))}</div>
@@ -1985,29 +1943,6 @@ function categoryEditSheet() {
     <p class="error">${esc(state.error)}</p>`, { persistent: true });
 }
 
-function incomeSheet() {
-  const rows = data.income.map((i) => `
-    <div class="card-row is-static">
-      <span class="tx-name">${esc(i.name)}</span>
-      <span class="tx-amount">${esc(fmt(i.amount))}</span>
-      <button class="chevron" data-action="delete-income" data-id="${i.id}" style="background:none;border:none;cursor:pointer;color:var(--danger)">✕</button>
-    </div>`).join("");
-
-  return sheetShell(`
-    <div class="sheet-title">${esc(t("income"))}</div>
-    <p class="sheet-hint">${esc(t("incomeHint", { period: periodOf(currentRange().start) }))}</p>
-    ${rows ? `<div class="card card-16" style="margin-bottom:18px">${rows}</div>` : ""}
-    <div class="field-row">
-      <label class="field"><span>${esc(t("name"))}</span><input id="income-name" type="text" /></label>
-      <label class="field"><span>${esc(t("amount"))}</span><input id="income-amount" type="number" step="0.01" min="0" /></label>
-    </div>
-    <div class="sheet-btn-row" style="margin-top:0">
-      <button class="btn-secondary" data-action="close-sheet">${esc(t("close"))}</button>
-      <button class="btn-primary" data-action="add-income">${esc(t("add"))}</button>
-    </div>
-    <p class="error">${esc(state.error)}</p>`, { persistent: true });
-}
-
 function profileSheet() {
   const me = data.me || {};
   return sheetShell(`
@@ -2018,13 +1953,6 @@ function profileSheet() {
     <label class="field"><span>${esc(t("profilePicture"))}</span>
       <input id="profile-avatar" type="file" accept="image/*" />
     </label>
-    <div class="field"><span>${esc(t("budgetGoals"))}</span>
-      <div class="field-row">
-        <label class="field"><span>${esc(t("wants"))}</span><input id="goal-wants" type="number" min="0" max="100" value="${me.wants_goal_pct != null ? me.wants_goal_pct : 50}" /></label>
-        <label class="field"><span>${esc(t("needs"))}</span><input id="goal-needs" type="number" min="0" max="100" value="${me.needs_goal_pct != null ? me.needs_goal_pct : 40}" /></label>
-        <label class="field"><span>${esc(t("savings"))}</span><input id="goal-savings" type="number" min="0" max="100" value="${me.savings_goal_pct != null ? me.savings_goal_pct : 10}" /></label>
-      </div>
-    </div>
     <div class="sheet-btn-row" style="margin-top:0">
       <button class="btn-secondary" data-action="close-sheet">${esc(t("cancel"))}</button>
       <button class="btn-primary" data-action="save-profile">${esc(t("save"))}</button>
@@ -2114,12 +2042,10 @@ const SHEETS = {
   timezone: timeZoneSheet,
   language: languageSheet,
   theme: themeSheet,
-  twofactor: twoFactorSheet,
   import: importSheet,
   deleteAccount: deleteAccountSheet,
   categories: categoriesSheet,
   categoryEdit: categoryEditSheet,
-  income: incomeSheet,
   profile: profileSheet,
   bankConnect: bankConnectSheet,
   bankCategory: bankCategorySheet,
@@ -2275,30 +2201,15 @@ async function loadRange() {
   const query = rangeQuery(range);
   const previous = previousRange(range);
 
-  const [categories, expenses, goals, prior] = await Promise.all([
+  const [categories, expenses, prior] = await Promise.all([
     apiFetch(`/api/budget?${query}`),
     apiFetch(`/api/expenses?${query}`),
-    apiFetch(`/api/budget/goals?${query}`),
     apiFetch(`/api/expenses?${rangeQuery(previous)}`),
   ]);
 
   data.categories = categories;
   data.expenses = expenses;
-  data.goals = goals;
   data.prevTotal = prior.reduce((sum, e) => sum + e.amount, 0);
-
-  // Income is month-keyed, so it only gets fetched when the Income toggle
-  // actually needs it - one call per month the range touches.
-  if (state.kind === "Income" || state.sheet === "income") {
-    const periods = [];
-    let cursor = new Date(range.start.getFullYear(), range.start.getMonth(), 1);
-    while (cursor <= range.end) {
-      periods.push(periodOf(cursor));
-      cursor = addMonths(cursor, 1);
-    }
-    const pages = await Promise.all(periods.map((p) => apiFetch(`/api/income?period=${p}`)));
-    data.income = pages.flat();
-  }
 }
 
 // Rates are the same for everyone and change once a day, so they load when
@@ -2526,13 +2437,6 @@ const ACTIONS = {
   "clear-category": () => { state.view = "summary"; state.selCat = null; },
   "open-search": () => { state.view = "activity"; state.searchOpen = true; },
   "close-search": () => { state.searchOpen = false; state.q = ""; },
-  "toggle-kind": async () => {
-    state.kind = state.kind === "Expenses" ? "Income" : "Expenses";
-    // The donut and the twelve-month chart are spend-shaped; income has no
-    // categories and no per-day rows, so it always reads on Activity.
-    state.view = "activity";
-    return refresh();
-  },
   "open-period": () => { state.sheet = "period"; },
   "clear-period": async () => {
     if (state.view !== "analytics") return;
@@ -2565,6 +2469,7 @@ const ACTIONS = {
     return patchAddSheet() ? "no-render" : undefined;
   },
   "set-add-category": (el) => { feedback("tap"); state.addCatId = Number(el.dataset.id); },
+  "set-add-date": (el) => { feedback("tap"); state.addDate = el.dataset.value; },
   // The date field is read straight from the DOM rather than mirrored into
   // state on every keystroke: a native date input owns its own editing.
   "save-expense": async () => {
@@ -2705,15 +2610,6 @@ const ACTIONS = {
     applySettings(settings);
     state.sheet = null;
   },
-  "open-twofactor": () => { state.sheet = "twofactor"; },
-  "set-twofactor": async (el) => {
-    await apiFetch("/api/me/two-factor", {
-      method: "PUT",
-      body: JSON.stringify({ enabled: el.dataset.value === "on" }),
-    });
-    state.sheet = null;
-    return refresh({ identity: true });
-  },
   "open-import": () => { state.sheet = "import"; state.error = ""; },
   "run-import": () => runImport(),
 
@@ -2797,45 +2693,13 @@ const ACTIONS = {
     return refresh({ identity: true, months: true });
   },
 
-  "open-income": async () => { state.sheet = "income"; state.error = ""; return refresh(); },
-  "add-income": async () => {
-    const name = document.getElementById("income-name").value.trim();
-    const amount = parseFloat(document.getElementById("income-amount").value);
-    if (!name || !amount) {
-      state.error = t("nameAndAmountRequired");
-      return;
-    }
-    await apiFetch("/api/income", {
-      method: "POST",
-      body: JSON.stringify({ name, amount, period: periodOf(currentRange().start) }),
-    });
-    state.error = "";
-    return refresh();
-  },
-  "delete-income": async (el) => {
-    await apiFetch(`/api/income/${el.dataset.id}`, { method: "DELETE" });
-    return refresh();
-  },
-
   "open-profile": () => { state.sheet = "profile"; state.error = ""; },
   "save-profile": async () => {
-    const wants = Number(document.getElementById("goal-wants").value);
-    const needs = Number(document.getElementById("goal-needs").value);
-    const savings = Number(document.getElementById("goal-savings").value);
-    if (Math.abs(wants + needs + savings - 100) > 0.5) {
-      state.error = t("errGoalsMustSumTo100");
-      return;
-    }
-
     const body = { display_name: document.getElementById("profile-name").value };
     const file = document.getElementById("profile-avatar").files[0];
     if (file) body.avatar_url = await resizeImageToDataUrl(file, 256);
 
     await apiFetch("/api/me/profile", { method: "PUT", body: JSON.stringify(body) });
-    await apiFetch("/api/me/goals", {
-      method: "PUT",
-      body: JSON.stringify({ wants_pct: wants, needs_pct: needs, savings_pct: savings }),
-    });
     state.sheet = null;
     return refresh({ identity: true });
   },
@@ -2989,7 +2853,7 @@ document.addEventListener("click", async (event) => {
 
 const busyButtons = new WeakSet();
 
-// The static forms (login, code, quiz) are not re-rendered from state, so
+// The static forms (login, password reset) are not re-rendered from state, so
 // their submit buttons get the same spinner by hand.
 async function withBusy(button, work) {
   if (!button || button.classList.contains("is-busy")) return undefined;
@@ -3059,14 +2923,10 @@ document.addEventListener("change", (event) => {
 // --- auth screens --------------------------------------------------------
 
 const authScreen = document.getElementById("auth-screen");
-const otpScreen = document.getElementById("otp-screen");
-const quizScreen = document.getElementById("quiz-screen");
 const appScreen = document.getElementById("app-screen");
-const ALL_SCREENS = [authScreen, otpScreen, quizScreen, appScreen];
+const ALL_SCREENS = [authScreen, appScreen];
 
 let mode = "login";
-let pendingOtpEmail = null;
-let quizAnswers = {};
 
 function showOnlyScreen(screen) {
   ALL_SCREENS.forEach((s) => s.classList.toggle("hidden", s !== screen));
@@ -3136,10 +2996,11 @@ async function showAppScreen() {
 }
 
 async function afterLogin() {
-  const me = await apiFetch("/api/me");
+  // The language goes along so that an account left half-finished by the old
+  // signup quiz is topped up in the language this browser is showing.
+  const me = await apiFetch(`/api/me?lang=${encodeURIComponent(settings.lang)}`);
   data.me = me;
   currentCurrency = me.currency || "USD";
-  if (!me.onboarded) return showQuizScreen();
   return showAppScreen();
 }
 
@@ -3168,11 +3029,6 @@ authForm.addEventListener("submit", async (event) => {
     try {
       const body = JSON.stringify({ email, password, lang: settings.lang });
       const res = await apiFetch(`/api/auth/${mode}`, { method: "POST", body });
-      if (res.requires_otp) {
-        pendingOtpEmail = email;
-        showOnlyScreen(otpScreen);
-        return;
-      }
       setToken(res.access_token);
       rememberEmail(email);
       await afterLogin();
@@ -3264,29 +3120,8 @@ function consumeOauthRedirect() {
   return true;
 }
 
-document.getElementById("otp-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const otpError = document.getElementById("otp-error");
-  otpError.textContent = "";
-  await withBusy(event.target.querySelector("button[type=submit]"), async () => {
-    try {
-      const res = await apiFetch("/api/auth/verify-otp", {
-        method: "POST",
-        body: JSON.stringify({ email: pendingOtpEmail, code: document.getElementById("otp-code").value }),
-      });
-      setToken(res.access_token);
-      await afterLogin();
-    } catch (err) {
-      otpError.textContent = err.message;
-      feedback("error");
-    }
-  });
-});
-
-document.getElementById("otp-back-link").addEventListener("click", showAuthScreen);
-
-// Password reset reuses the OTP screen's shape: ask for the email, then take
-// the code and the new password in the same place.
+// Password reset asks for the email, then takes the code and the new password
+// through prompts - no screen of its own.
 document.getElementById("forgot-password-link").addEventListener("click", async () => {
   const email = document.getElementById("email").value.trim();
   if (!email) {
@@ -3307,50 +3142,6 @@ document.getElementById("forgot-password-link").addEventListener("click", async 
   } catch (err) {
     authError.textContent = err.message;
   }
-});
-
-async function showQuizScreen() {
-  showOnlyScreen(quizScreen);
-  quizAnswers = {};
-  const questions = await apiFetch("/api/quiz");
-  renderQuiz(questions);
-}
-
-function renderQuiz(questions) {
-  document.getElementById("quiz-questions").innerHTML = questions.map((q) => `
-    <div class="quiz-question">
-      <p>${esc(localizedQuizText(q.id))}</p>
-      <div class="quiz-options">
-        ${q.options.map((o) => `<button type="button" class="quiz-option" data-question="${esc(q.id)}" data-option="${esc(o.id)}">${esc(localizedQuizText(q.id, o.id))}</button>`).join("")}
-      </div>
-    </div>`).join("");
-
-  document.getElementById("quiz-questions").querySelectorAll(".quiz-option").forEach((button) => {
-    button.addEventListener("click", () => {
-      quizAnswers[button.dataset.question] = button.dataset.option;
-      button.parentElement.querySelectorAll(".quiz-option").forEach((b) => b.classList.remove("is-selected"));
-      button.classList.add("is-selected");
-      document.getElementById("quiz-submit-btn").disabled = Object.keys(quizAnswers).length < questions.length;
-    });
-  });
-}
-
-document.getElementById("quiz-submit-btn").addEventListener("click", async (event) => {
-  const quizError = document.getElementById("quiz-error");
-  quizError.textContent = "";
-  await withBusy(event.currentTarget, async () => {
-    try {
-      await apiFetch("/api/onboarding/complete", {
-        method: "POST",
-        body: JSON.stringify({ answers: quizAnswers, lang: settings.lang }),
-      });
-      feedback("success");
-      await showAppScreen();
-    } catch (err) {
-      quizError.textContent = err.message;
-      feedback("error");
-    }
-  });
 });
 
 // --- boot ----------------------------------------------------------------

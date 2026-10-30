@@ -14,7 +14,7 @@ function freshEmail() {
 
 const PASSWORD = "e2e-password-2026";
 
-/** Signs up and completes the onboarding quiz, landing on the app screen. */
+/** Signs up, landing straight on the app screen. */
 async function signUp(page, email = freshEmail()) {
   await page.goto("./");
   await expect(page.locator("#auth-screen")).toBeVisible();
@@ -24,13 +24,8 @@ async function signUp(page, email = freshEmail()) {
   await page.locator("#password").fill(PASSWORD);
   await page.locator("#auth-submit").click();
 
-  // The quiz appears for every new account; answer each question's first option.
-  await expect(page.locator("#quiz-screen")).toBeVisible();
-  const questions = page.locator(".quiz-question");
-  for (let i = 0; i < (await questions.count()); i++) {
-    await questions.nth(i).locator(".quiz-option").first().click();
-  }
-  await page.locator("#quiz-submit-btn").click();
+  // Nothing stands between signing up and the app: the account is created
+  // with a starter set of categories already in place.
   await expect(page.locator("#app-screen")).toBeVisible();
   return { email, password: PASSWORD };
 }

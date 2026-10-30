@@ -18,8 +18,7 @@ class User(Base):
     # Expenses are always stored in UTC; this is only ever used to decide which
     # calendar day a stored instant falls on for the person reading it.
     timezone = Column(String, nullable=True)
-    two_factor_enabled = Column(Boolean, nullable=False, default=False)
-    onboarded = Column(Boolean, nullable=False, default=False)  # false until the signup quiz picks their categories
+    onboarded = Column(Boolean, nullable=False, default=False)  # false only on accounts left half-set-up by the signup quiz this replaced
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Set when the account was created (or last signed in) through Google /
@@ -33,19 +32,15 @@ class User(Base):
     avatar_url = Column(String, nullable=True)  # data URL (small, base64-encoded image) or an /uploads path
 
     # Target split for the GOALS section of the budget view; must sum to 100.
-    wants_goal_pct = Column(Float, nullable=False, default=50.0)
-    needs_goal_pct = Column(Float, nullable=False, default=40.0)
-    savings_goal_pct = Column(Float, nullable=False, default=10.0)
 
     expenses = relationship("Expense", back_populates="user")
     categories = relationship("BudgetCategory", back_populates="user")
-    income_sources = relationship("IncomeSource", back_populates="user")
 
 
 class OtpCode(Base):
     """
     A short-lived, single-use code emailed to the user - for either logging
-    in (when two_factor_enabled) or resetting a forgotten password. Both
+    in or resetting a forgotten password. Both
     purposes share this table since the shape (a code that expires and gets
     used once) is identical; `purpose` keeps them from being interchangeable.
     """
@@ -83,22 +78,6 @@ class BudgetCategory(Base):
     expenses = relationship("Expense", back_populates="matched_category")
 
 
-class IncomeSource(Base):
-    """
-    A named income line for one month (e.g. "ING ramas", "Bursa") - the
-    INCOME column of the user's spreadsheet. Kept separate from Expense
-    since it's income, not spend, and doesn't need category matching.
-    """
-    __tablename__ = "income_sources"
-
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
-    amount = Column(Float, nullable=False)
-    period = Column(String, nullable=False, index=True)  # "YYYY-MM"
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    user = relationship("User", back_populates="income_sources")
 
 
 class Expense(Base):

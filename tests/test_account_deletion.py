@@ -16,7 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.models import User, Expense, BudgetCategory, IncomeSource, OtpCode
+from app.models import User, Expense, BudgetCategory, OtpCode
 from app import oauth
 
 TEST_DB_URL = "sqlite:///:memory:"
@@ -67,7 +67,6 @@ def _fill_account(headers):
         "/api/expenses", headers=headers,
         json={"amount": 12.5, "category_id": category_id, "note": "lunch"},
     )
-    client.post("/api/income", headers=headers, json={"name": "Salary", "amount": 100})
     return category_id
 
 
@@ -80,7 +79,6 @@ def _counts(email):
         return {
             "expenses": db.query(Expense).filter(Expense.user_id == user.id).count(),
             "categories": db.query(BudgetCategory).filter(BudgetCategory.user_id == user.id).count(),
-            "income": db.query(IncomeSource).filter(IncomeSource.user_id == user.id).count(),
             "otp": db.query(OtpCode).filter(OtpCode.user_id == user.id).count(),
         }
     finally:
@@ -97,7 +95,7 @@ def test_deleting_an_account_removes_the_user_and_everything_it_owned():
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["deleted"] is True
-    assert body["expenses"] == 1 and body["income"] == 1
+    assert body["expenses"] == 1 and body["categories"] >= 1
 
     assert _counts(email) is None  # the user row itself is gone
 
@@ -105,7 +103,7 @@ def test_deleting_an_account_removes_the_user_and_everything_it_owned():
     try:
         # Nothing orphaned: no row anywhere still points at the dead user.
         assert db.query(User).filter(User.email == email).count() == 0
-        for model in (Expense, BudgetCategory, IncomeSource, OtpCode):
+        for model in (Expense, BudgetCategory, OtpCode):
             assert db.query(model).count() == db.query(model).filter(model.user_id.isnot(None)).count()
     finally:
         db.close()
@@ -168,5 +166,5 @@ def test_deleting_one_account_leaves_another_alone():
 
     assert _counts("doomed@example.com") is None
     survivor = _counts(keeper)
-    assert survivor["expenses"] == 1 and survivor["income"] == 1
+    assert survivor["expenses"] == 1 and survivor["categories"] >= 1
     assert client.get("/api/me", headers=keeper_headers).status_code == 200

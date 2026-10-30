@@ -24,7 +24,6 @@ from sqlalchemy.pool import StaticPool
 from app import bnr
 from app.database import Base, get_db
 from app.main import app
-from app.parser import parse_expense_message
 
 TEST_DB_URL = "sqlite:///:memory:"
 engine = create_engine(TEST_DB_URL, connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -320,23 +319,6 @@ def test_page_rates_labels_each_row_with_its_source():
 # --- the parser ------------------------------------------------------------
 
 
-@pytest.mark.parametrize("text,expected", [
-    ("50 eur benzina", "EUR"),
-    ("spent 100 usd on groceries", "USD"),
-    ("gbp 40 books", "GBP"),
-    ("25,50 lei cafea", "RON"),
-    ("120 mancare", None),  # no currency word: the account's own is implied
-])
-def test_parser_picks_up_a_currency_when_one_is_named(text, expected):
-    assert parse_expense_message(text).currency == expected
-
-
-def test_parser_keeps_the_currency_word_out_of_the_category():
-    parsed = parse_expense_message("50 eur benzina")
-    assert parsed.category == "benzina"
-    assert parsed.amount == 50.0
-
-
 # --- the API ---------------------------------------------------------------
 
 
@@ -365,12 +347,6 @@ def test_rates_endpoint_reports_when_rates_cannot_be_had(tmp_path, monkeypatch):
     monkeypatch.setattr(bnr, "RATES_DIR", tmp_path)
     monkeypatch.setattr(bnr, "_live_snapshot", lambda: None)
     assert client.get("/api/rates").status_code == 503
-
-
-def test_convert_endpoint(rates_dir):
-    body = client.get("/api/rates/convert", params={"amount": 100, "source": "EUR", "target": "RON"}).json()
-    assert body["amount"] == pytest.approx(525.24)
-    assert body["target"] == "RON"
 
 
 def test_expense_in_a_foreign_currency_is_stored_in_the_users_own(rates_dir):
@@ -451,17 +427,6 @@ def test_an_unknown_currency_is_rejected_rather_than_logged_one_to_one(rates_dir
 
     r = client.post("/api/expenses", headers=_auth(token), json={"amount": 25, "currency": "XYZ"})
     assert r.status_code == 400
-
-
-def test_chat_message_converts_a_currency_it_was_given(rates_dir):
-    token = _signup("chat@example.com")
-    _set_currency(token, "RON")
-
-    body = client.post("/api/chat/message", headers=_auth(token), json={"text": "25 eur benzina"}).json()
-    assert body["parsed"] is True
-    assert body["amount"] == pytest.approx(131.31)
-    assert body["original_amount"] == 25
-    assert body["original_currency"] == "EUR"
 
 
 def test_a_user_whose_currency_is_eur_converts_the_other_way(rates_dir):

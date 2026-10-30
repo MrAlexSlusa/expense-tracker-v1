@@ -1,4 +1,4 @@
-from datetime import datetime, date, time, timedelta, timezone as dt_timezone
+from datetime import datetime, date, time, timezone as dt_timezone
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from calendar import monthrange
@@ -10,12 +10,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import User, Expense, BudgetCategory, IncomeSource, OtpCode
-from app.utils import best_category_match
+from app.models import User, Expense, BudgetCategory, OtpCode
 from app.auth import hash_password, verify_password, create_access_token, get_current_user, issue_otp, consume_otp
-from app.parser import parse_expense_message
 from app.email_sender import send_otp_email
-from app.quiz import public_questions, compute_categories, fallback_category
+from app.starter import FALLBACK_NAMES, starter_categories
 from app import oauth
 from app.importer import parse_workbook, guess_period_from_filename
 from app import bnr
@@ -24,14 +22,9 @@ from app.schemas import (
     LoginRequest,
     TokenResponse,
     LoginResponse,
-    VerifyOtpRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
-    TwoFactorUpdateRequest,
     DeleteAccountRequest,
-    OnboardingRequest,
-    ChatMessageRequest,
-    ChatMessageResponse,
     CategoryCreateRequest,
     CategoryUpdateRequest,
     CurrencyUpdateRequest,
@@ -39,9 +32,6 @@ from app.schemas import (
     ExpenseCreateRequest,
     ExpenseUpdateRequest,
     ProfileUpdateRequest,
-    GoalUpdateRequest,
-    IncomeCreateRequest,
-    IncomeUpdateRequest,
 )
 
 router = APIRouter()
@@ -111,15 +101,6 @@ def _month_bounds(period: Optional[str], user: Optional[User] = None) -> tuple[d
     return _utc_window(date(year, month, 1), date(year, month, days_in_month), user_zone(user))
 
 
-def _periods_between(start: datetime, end: datetime) -> list[str]:
-    """Every "YYYY-MM" the given range touches, for the month-keyed income rows."""
-    periods, year, month = [], start.year, start.month
-    while (year, month) <= (end.year, end.month):
-        periods.append(f"{year:04d}-{month:02d}")
-        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
-    return periods
-
-
 def _date_range(
     period: Optional[str] = None,
     start: Optional[str] = None,
@@ -149,56 +130,89 @@ def _date_range(
 # --- App account endpoints (email/password + JWT) -------------------------
 
 
+def _normalize_email(email: str) -> str:
+    """
+    The canonical form of an address: lowercased and trimmed.
+
+    Addresses are case-insensitive in practice - nobody thinks of
+    Alex@example.com and alex@example.com as two accounts - and the social
+    providers hand us a lowercased address regardless. Storing and comparing
+    one form is what keeps a password signup and a Google sign-in landing on
+    the same row.
+    """
+    return (email or "").strip().lower()
+
+
+def _user_by_email(db: Session, email: str) -> Optional[User]:
+    """
+    Finds an account by address, ignoring case.
+
+    Every way into an account goes through here. A case-sensitive lookup used
+    to let a second account exist for the same address, after which a login,
+    a reset or a social sign-in could each land on a different one.
+    """
+    return db.query(User).filter(func.lower(User.email) == _normalize_email(email)).first()
+
+
+def _give_starter_categories(db: Session, user: User, lang: str) -> None:
+    """
+    Fills a new account's category list, and tops up an older one that never
+    got past the signup quiz this replaced.
+
+    Only names the account does not already have are added, so running it
+    again on an account that kept its fallback category adds the rest rather
+    than a second "Other".
+    """
+    existing = {
+        name.strip().lower()
+        for (name,) in db.query(BudgetCategory.name).filter(BudgetCategory.user_id == user.id)
+    }
+    has_fallback = bool(existing & FALLBACK_NAMES)
+    for name, icon in starter_categories(lang):
+        key = name.strip().lower()
+        if key in existing:
+            continue
+        # The catch-all counts as present under any language's name, so an
+        # account topped up in a second language does not end up with both
+        # "Other" and "Altele".
+        if key in FALLBACK_NAMES and has_fallback:
+            continue
+        db.add(BudgetCategory(user_id=user.id, name=name, icon=icon))
+    user.onboarded = True
+    db.commit()
+
+
 @router.post("/api/auth/signup", response_model=TokenResponse)
 def signup(payload: SignupRequest, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == payload.email).first()
+    existing = _user_by_email(db, payload.email)
     if existing is not None:
         raise HTTPException(status_code=400, detail="An account with this email already exists")
 
-    user = User(email=payload.email, hashed_password=hash_password(payload.password))
+    user = User(email=_normalize_email(payload.email), hashed_password=hash_password(payload.password))
     db.add(user)
     db.commit()
     db.refresh(user)
 
-    # A single safety-net category so the fuzzy-match fallback (best_category_match)
-    # always has somewhere to land - replaced with the quiz-picked set once
-    # POST /api/onboarding/complete runs (see `onboarded` below).
-    name, icon = fallback_category(payload.lang)
-    db.add(BudgetCategory(user_id=user.id, name=name, icon=icon))
-    db.commit()
+    _give_starter_categories(db, user, payload.lang)
 
     return TokenResponse(access_token=create_access_token(user.id))
 
 
 @router.post("/api/auth/login", response_model=LoginResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
+    user = _user_by_email(db, payload.email)
     invalid = HTTPException(status_code=401, detail="Incorrect email or password")
     if user is None or user.hashed_password is None:
         raise invalid
     if not verify_password(payload.password, user.hashed_password):
         raise invalid
 
-    if user.two_factor_enabled:
-        code = issue_otp(db, user, "login")
-        send_otp_email(user.email, code, "login")
-        return LoginResponse(requires_otp=True)
-
     return LoginResponse(access_token=create_access_token(user.id))
-
-
-@router.post("/api/auth/verify-otp", response_model=TokenResponse)
-def verify_login_otp(payload: VerifyOtpRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
-    invalid = HTTPException(status_code=401, detail="Incorrect or expired code")
-    if user is None or not consume_otp(db, user, "login", payload.code):
-        raise invalid
-    return TokenResponse(access_token=create_access_token(user.id))
 
 
 @router.post("/api/auth/forgot-password")
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
+    user = _user_by_email(db, payload.email)
     # Always the same response either way, so this endpoint can't be used to
     # probe which emails have accounts.
     if user is not None and user.hashed_password is not None:
@@ -209,7 +223,7 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
 
 @router.post("/api/auth/reset-password")
 def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
+    user = _user_by_email(db, payload.email)
     invalid = HTTPException(status_code=401, detail="Incorrect or expired code")
     if user is None or not consume_otp(db, user, "reset", payload.code):
         raise invalid
@@ -283,17 +297,16 @@ def _complete_oauth(provider: str, code: str, state: str, request: Request, db: 
     except oauth.OAuthError as e:
         return RedirectResponse(f"{redirect_uri}#oauth_error={quote(str(e))}", status_code=302)
 
-    user = db.query(User).filter(func.lower(User.email) == email).first()
+    user = _user_by_email(db, email)
     if user is None:
-        # New account: no password is ever set, and onboarded stays false so
-        # the signup quiz runs exactly as it does for an email signup.
+        # New account: no password is ever set. A social sign-in carries no
+        # language, so the starter set lands in English and is renamed like
+        # any other category.
         user = User(email=email, oauth_provider=provider, oauth_sub=subject, display_name=display_name)
         db.add(user)
         db.commit()
         db.refresh(user)
-        name, icon = fallback_category("en")
-        db.add(BudgetCategory(user_id=user.id, name=name, icon=icon))
-        db.commit()
+        _give_starter_categories(db, user, "en")
     else:
         user.oauth_provider = provider
         user.oauth_sub = subject
@@ -305,21 +318,26 @@ def _complete_oauth(provider: str, code: str, state: str, request: Request, db: 
 
 
 @router.get("/api/me")
-def get_me(user: User = Depends(get_current_user)):
+def get_me(
+    lang: Optional[str] = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # An account created before the signup quiz was dropped may still be
+    # sitting on the single fallback category it got at signup, with no way
+    # left to finish. The first read of the profile tops it up instead.
+    if not user.onboarded:
+        _give_starter_categories(db, user, lang or "en")
+
     return {
         "id": user.id,
         "email": user.email,
         "currency": user.currency,
         "timezone": user.timezone,
-        "two_factor_enabled": user.two_factor_enabled,
-        "onboarded": user.onboarded,
         "oauth_provider": user.oauth_provider,
         "has_password": user.hashed_password is not None,
         "display_name": user.display_name,
         "avatar_url": user.avatar_url,
-        "wants_goal_pct": user.wants_goal_pct,
-        "needs_goal_pct": user.needs_goal_pct,
-        "savings_goal_pct": user.savings_goal_pct,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
@@ -354,7 +372,6 @@ def delete_account(
     deleted = {
         "expenses": db.query(Expense).filter(Expense.user_id == user_id).delete(synchronize_session=False),
         "categories": db.query(BudgetCategory).filter(BudgetCategory.user_id == user_id).delete(synchronize_session=False),
-        "income": db.query(IncomeSource).filter(IncomeSource.user_id == user_id).delete(synchronize_session=False),
         "otp_codes": db.query(OtpCode).filter(OtpCode.user_id == user_id).delete(synchronize_session=False),
     }
     db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
@@ -445,96 +462,15 @@ def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_
         .first()
     )
 
-    zone = user_zone(user)
-    dates_with_expenses = {
-        local_date(e.created_at, zone)
-        for e in db.query(Expense.created_at).filter(Expense.user_id == user.id).all()
-    }
-    streak = 0
-    cursor = today_for(user)
-    while cursor in dates_with_expenses:
-        streak += 1
-        cursor -= timedelta(days=1)
-
     return {
         "total_all_time": round(total_all_time, 2),
         "total_this_month": round(total_this_month, 2),
         "monthly_average": round(monthly_average, 2),
         "top_category": top_category_row[0] if top_category_row else None,
         "top_category_total": round(top_category_row[1], 2) if top_category_row else None,
-        "current_streak_days": streak,
         "member_since": user.created_at.isoformat() if user.created_at else None,
         "months_tracked": len(by_month),
     }
-
-
-@router.put("/api/me/goals")
-def update_goals(
-    payload: GoalUpdateRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    total = payload.wants_pct + payload.needs_pct + payload.savings_pct
-    if abs(total - 100) > 0.5:
-        raise HTTPException(status_code=400, detail="Wants + Needs + Savings must add up to 100%")
-
-    user.wants_goal_pct = payload.wants_pct
-    user.needs_goal_pct = payload.needs_pct
-    user.savings_goal_pct = payload.savings_pct
-    db.commit()
-    return {
-        "wants_goal_pct": user.wants_goal_pct,
-        "needs_goal_pct": user.needs_goal_pct,
-        "savings_goal_pct": user.savings_goal_pct,
-    }
-
-
-@router.put("/api/me/two-factor")
-def update_two_factor(
-    payload: TwoFactorUpdateRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    user.two_factor_enabled = payload.enabled
-    db.commit()
-    return {"two_factor_enabled": user.two_factor_enabled}
-
-
-# --- Signup quiz: picks 5 starting categories instead of a generic set -----
-
-
-@router.get("/api/quiz")
-def get_quiz():
-    return public_questions()
-
-
-@router.post("/api/onboarding/complete")
-def complete_onboarding(
-    payload: OnboardingRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    answer_pairs = list(payload.answers.items())
-    categories = compute_categories(answer_pairs, payload.lang)
-
-    # Replaces whatever's there (normally just the signup-time Altele
-    # placeholder) rather than appending, so retaking the quiz later - once
-    # that's exposed in Settings - doesn't pile up duplicates.
-    db.query(Expense).filter(Expense.user_id == user.id).update({"category_id": None})
-    db.query(BudgetCategory).filter(BudgetCategory.user_id == user.id).delete()
-
-    created = []
-    for name, icon in categories:
-        category = BudgetCategory(user_id=user.id, name=name, icon=icon)
-        db.add(category)
-        created.append(category)
-
-    user.onboarded = True
-    db.commit()
-    for c in created:
-        db.refresh(c)
-
-    return [{"id": c.id, "name": c.name, "icon": c.icon, "target": c.target} for c in created]
 
 
 @router.put("/api/me/currency")
@@ -568,76 +504,6 @@ def get_rates():
         return bnr.page_rates()
     except bnr.RatesUnavailable:
         raise HTTPException(status_code=503, detail="Exchange rates are unavailable right now - try again shortly")
-
-
-@router.get("/api/rates/convert")
-def convert_amount(amount: float, source: str, target: str):
-    try:
-        converted, rate = bnr.convert(amount, source, target)
-    except bnr.RatesUnavailable:
-        raise HTTPException(status_code=503, detail="Exchange rates are unavailable right now - try again shortly")
-    except KeyError as unknown:
-        raise HTTPException(status_code=400, detail=f"No BNR exchange rate for {unknown.args[0]}")
-    return {"amount": converted, "rate": rate, "source": source.upper(), "target": target.upper()}
-
-
-# --- In-app chat: logging an expense by typing it out ----------------------
-
-
-@router.post("/api/chat/message", response_model=ChatMessageResponse)
-def send_chat_message(
-    payload: ChatMessageRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    parsed = parse_expense_message(payload.text)
-    if parsed is None:
-        return ChatMessageResponse(parsed=False)
-
-    categories = db.query(BudgetCategory).filter(BudgetCategory.user_id == user.id).all()
-    matched_name = best_category_match(parsed.category, [c.name for c in categories])
-    matched = next((c for c in categories if c.name == matched_name), None)
-
-    # "25 eur benzina" is logged in euros and stored in the user's currency,
-    # the same way the app's own add sheet does it.
-    amount, original_amount, original_currency, fx_rate = _convert_for_user(parsed.amount, parsed.currency, user)
-
-    expense = Expense(
-        user_id=user.id,
-        amount=amount,
-        original_amount=original_amount,
-        original_currency=original_currency,
-        fx_rate=fx_rate,
-        category=parsed.category,
-        category_id=matched.id if matched is not None else None,
-        raw_message=payload.text,
-    )
-    db.add(expense)
-    db.commit()
-
-    label = matched.name if matched is not None else (parsed.category or "uncategorized")
-    response = ChatMessageResponse(
-        amount=amount,
-        category=label,
-        original_amount=original_amount,
-        original_currency=original_currency,
-    )
-
-    if matched is not None and matched.target is not None:
-        start, end = _month_bounds(None, user)
-        spent = (
-            db.query(func.sum(Expense.amount))
-            .filter(Expense.user_id == user.id, Expense.category_id == matched.id)
-            .filter(Expense.created_at >= start, Expense.created_at <= end)
-            .scalar()
-            or 0.0
-        )
-        if spent > matched.target:
-            response.over_budget = True
-            response.spent = round(spent, 2)
-            response.target = matched.target
-
-    return response
 
 
 # --- Budget view: the app's version of the spreadsheet ---------------------
@@ -676,93 +542,6 @@ def get_budget(
         }
         for c in categories
     ]
-
-
-@router.get("/api/budget/goals")
-def get_budget_goals(
-    period: Optional[str] = None,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    The GOALS/ACTUAL block from the spreadsheet: target % (from the user's
-    profile) vs actual % for Wants/Needs/Savings. Matches the spreadsheet's
-    own math - each tag's spend as a share of that period's TOTAL INCOME
-    (not of total spend; confirmed against the real sheets, e.g. Jan 2026:
-    2.282,43 Wants spend / 3.365,00 total income = 67,83%, the exact figure
-    in that sheet's ACTUAL row) - so overspending relative to income shows
-    up the same way it does there, including going over 100%.
-    """
-    start, end = _date_range(period, start, end, user)
-    rows = (
-        db.query(BudgetCategory.tag, func.sum(Expense.amount))
-        .join(Expense, Expense.category_id == BudgetCategory.id)
-        .filter(Expense.user_id == user.id, Expense.created_at >= start, Expense.created_at <= end)
-        .group_by(BudgetCategory.tag)
-        .all()
-    )
-    by_tag = {tag: amount for tag, amount in rows if tag}
-
-    total_income = (
-        db.query(func.sum(IncomeSource.amount))
-        .filter(IncomeSource.user_id == user.id, IncomeSource.period.in_(_periods_between(start, end)))
-        .scalar()
-        or 0.0
-    )
-
-    targets = {"Wants": user.wants_goal_pct, "Needs": user.needs_goal_pct, "Savings": user.savings_goal_pct}
-    return [
-        {
-            "tag": tag,
-            "target_pct": targets[tag],
-            "actual_pct": round((by_tag.get(tag, 0.0) / total_income) * 100, 2) if total_income else 0.0,
-            "actual_amount": round(by_tag.get(tag, 0.0), 2),
-        }
-        for tag in ("Wants", "Needs", "Savings")
-    ]
-
-
-@router.get("/api/budget/periods")
-def list_budget_periods(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Every "YYYY-MM" that has at least one logged expense, newest first, for
-    the month-picker menu - plus the current month even if it's still empty.
-    """
-    rows = (
-        db.query(Expense.created_at)
-        .filter(Expense.user_id == user.id)
-        .all()
-    )
-    zone = user_zone(user)
-    periods = {local_date(d, zone).strftime("%Y-%m") for (d,) in rows}
-    current = today_for(user)
-    periods.add(f"{current.year:04d}-{current.month:02d}")
-    return sorted(periods, reverse=True)
-
-
-@router.get("/api/budget/graph")
-def get_yearly_graph(
-    year: Optional[int] = None,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Total spend per month for one year - the data behind the Graph tab."""
-    year = year or today_for(user).year
-    start = datetime(year, 1, 1)
-    end = datetime(year, 12, 31, 23, 59, 59)
-
-    rows = (
-        db.query(Expense.created_at, Expense.amount)
-        .filter(Expense.user_id == user.id, Expense.created_at >= start, Expense.created_at <= end)
-        .all()
-    )
-    monthly = [0.0] * 12
-    for created_at, amount in rows:
-        monthly[created_at.month - 1] += amount
-
-    return {"year": year, "months": [round(m, 2) for m in monthly]}
 
 
 @router.post("/api/budget/categories")
@@ -1032,90 +811,6 @@ def delete_expense(
     return {"deleted": True}
 
 
-# --- Income sources ----------------------------------------------------
-# The INCOME column of the spreadsheet: named amounts for one month, no
-# category matching needed since it's income rather than spend.
-
-
-def _income_to_dict(i: IncomeSource) -> dict:
-    return {"id": i.id, "name": i.name, "amount": i.amount, "period": i.period}
-
-
-@router.get("/api/income")
-def list_income(
-    period: Optional[str] = None,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    period = period or _current_period(user)
-    rows = (
-        db.query(IncomeSource)
-        .filter(IncomeSource.user_id == user.id, IncomeSource.period == period)
-        .order_by(IncomeSource.id)
-        .all()
-    )
-    return [_income_to_dict(i) for i in rows]
-
-
-@router.post("/api/income")
-def create_income(
-    payload: IncomeCreateRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    name = payload.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Income name can't be empty")
-
-    income = IncomeSource(
-        user_id=user.id,
-        name=name,
-        amount=payload.amount,
-        period=payload.period or _current_period(user),
-    )
-    db.add(income)
-    db.commit()
-    db.refresh(income)
-    return _income_to_dict(income)
-
-
-@router.put("/api/income/{income_id}")
-def update_income(
-    income_id: int,
-    payload: IncomeUpdateRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    income = db.query(IncomeSource).filter(IncomeSource.id == income_id, IncomeSource.user_id == user.id).first()
-    if income is None:
-        raise HTTPException(status_code=404, detail="Income source not found")
-
-    if payload.name is not None:
-        name = payload.name.strip()
-        if not name:
-            raise HTTPException(status_code=400, detail="Income name can't be empty")
-        income.name = name
-    if payload.amount is not None:
-        income.amount = payload.amount
-
-    db.commit()
-    return _income_to_dict(income)
-
-
-@router.delete("/api/income/{income_id}")
-def delete_income(
-    income_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    income = db.query(IncomeSource).filter(IncomeSource.id == income_id, IncomeSource.user_id == user.id).first()
-    if income is None:
-        raise HTTPException(status_code=404, detail="Income source not found")
-    db.delete(income)
-    db.commit()
-    return {"deleted": True}
-
-
 def _current_period(user: Optional[User] = None) -> str:
     today = today_for(user)
     return f"{today.year:04d}-{today.month:02d}"
@@ -1123,7 +818,7 @@ def _current_period(user: Optional[User] = None) -> str:
 
 # --- Spreadsheet import --------------------------------------------------
 # Uploads the same shape of file as the user's own Google Sheets budget
-# ("<Month> Budget Tracker") and populates categories/expenses/income/goals
+# ("<Month> Budget Tracker") and populates categories and expenses
 # from it. See app/importer.py for the parsing rules.
 
 
@@ -1142,8 +837,8 @@ async def import_spreadsheet(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if not result.income and not result.categories:
-        raise HTTPException(status_code=400, detail="Couldn't find any income or spending rows in this file")
+    if not result.categories:
+        raise HTTPException(status_code=400, detail="Couldn't find any spending rows in this file")
 
     existing_categories = {c.name.lower(): c for c in db.query(BudgetCategory).filter(BudgetCategory.user_id == user.id).all()}
     categories_created = 0
@@ -1158,9 +853,6 @@ async def import_spreadsheet(
         Expense.created_at >= period_start,
         Expense.created_at <= period_end,
     ).delete(synchronize_session=False)
-    db.query(IncomeSource).filter(IncomeSource.user_id == user.id, IncomeSource.period == period).delete(
-        synchronize_session=False
-    )
 
     import_date = period_start.replace(hour=12)
 
@@ -1189,26 +881,12 @@ async def import_spreadsheet(
             )
         )
 
-    for row in result.income:
-        db.add(IncomeSource(user_id=user.id, name=row.name, amount=row.amount, period=period))
-
-    for tag, goal in result.goals.items():
-        if goal.target_pct is None:
-            continue
-        if tag == "Wants":
-            user.wants_goal_pct = goal.target_pct
-        elif tag == "Needs":
-            user.needs_goal_pct = goal.target_pct
-        elif tag == "Savings":
-            user.savings_goal_pct = goal.target_pct
-
     db.commit()
 
     return {
         "period": period,
         "categories_created": categories_created,
         "categories_updated": categories_updated,
-        "income_rows": len(result.income),
         "total_imported": round(sum(r.amount for r in result.categories), 2),
         "warnings": result.warnings,
     }

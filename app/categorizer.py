@@ -169,11 +169,24 @@ MCC_HINTS = {
 
 # Tells a transfer or an incoming payment apart from a purchase. These never
 # become expenses - filing a salary as spending would wreck every total.
-TRANSFER_WORDS = (
-    "transfer", "top up", "topup", "topping up", "incasare", "alimentare",
-    "exchange", "schimb valutar", "to savings", "vault", "salary", "salariu",
-    "refund", "rambursare", "cashback", "retragere", "withdrawal", "atm",
+# Phrases that are a bank's own wording for moving money between the user's
+# pockets. None of these reads as the name of a shop, so matching one is
+# enough to rule the row out of the budget on its own.
+INTERNAL_MOVEMENT = (
+    "transfer", "top up", "topup", "topping up", "alimentare",
+    "schimb valutar", "to savings", "vault",
 )
+
+# Words that usually mean the same thing but can equally be part of a real
+# business name - "The Exchange" is a pub, "ATM Cafe" is a cafe, and plenty of
+# shops have "salary" or "refund" in a trading name. Matching one of these is a
+# suspicion, not a verdict: see looks_like_transfer below for what that buys.
+AMBIGUOUS_TRANSFER = (
+    "incasare", "exchange", "salary", "salariu", "refund", "rambursare",
+    "cashback", "retragere", "withdrawal", "atm",
+)
+
+TRANSFER_WORDS = INTERNAL_MOVEMENT + AMBIGUOUS_TRANSFER
 
 # How close a bucket word has to be to one of the user's category names.
 # Same cutoff as the chat parser uses, for the same reason: a near-miss is
@@ -207,8 +220,23 @@ def _match_bucket(bucket, category_names: list) -> Optional[str]:
 
 
 def looks_like_transfer(text: Optional[str]) -> bool:
+    """True when the text matches any transfer wording, certain or not."""
     key = normalize_merchant(text)
     return any(word in key for word in TRANSFER_WORDS)
+
+
+def is_internal_movement(text: Optional[str]) -> bool:
+    """
+    True only for wording no shop would carry, so an outgoing row matching it
+    can be dropped without asking.
+
+    The distinction matters because a dropped row is invisible: it is not an
+    expense and it is not in the confirm inbox either. Deciding that on a word
+    like "exchange" would lose a real payment with nothing to show the user,
+    which is the one outcome the rest of this module is built to avoid.
+    """
+    key = normalize_merchant(text)
+    return any(word in key for word in INTERNAL_MOVEMENT)
 
 
 def suggest_category(

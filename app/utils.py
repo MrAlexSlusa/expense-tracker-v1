@@ -1,34 +1,5 @@
-import difflib
 import re
-from typing import List, Optional
-
-
-FALLBACK_CATEGORY_NAME = "Altele"  # the Romanian original, kept because existing data still uses it
-# One fallback category name per app language (see app/quiz.py FALLBACK_NAMES_BY_LANG) -
-# a user's fallback category is named for whichever language was active at signup/quiz
-# time, so matching has to recognize all of them, not just the Romanian original.
-FALLBACK_CATEGORY_NAMES = {"altele", "other", "otros", "autres"}
-CATEGORY_MATCH_CUTOFF = 0.7
-
-
-def best_category_match(category_word: Optional[str], category_names: List[str]) -> Optional[str]:
-    """
-    Same fuzzy-matching rule as the Google Sheet mirror (see app/sheets.py):
-    typos are fine, but an unrelated word (a merchant name, say) falls back
-    to the user's "Other"-equivalent category rather than risk filing it
-    under the wrong one.
-    """
-    fallback = next((n for n in category_names if n.lower() in FALLBACK_CATEGORY_NAMES), None)
-
-    if not category_word:
-        return fallback
-
-    names_lower = [n.lower() for n in category_names]
-    match = difflib.get_close_matches(category_word.lower(), names_lower, n=1, cutoff=CATEGORY_MATCH_CUTOFF)
-    if not match:
-        return fallback
-
-    return category_names[names_lower.index(match[0])]
+from typing import Optional
 
 
 CURRENCY_WORDS = re.compile(r"\b(lei|ron|eur|usd)\b", re.IGNORECASE)

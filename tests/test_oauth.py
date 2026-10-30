@@ -137,7 +137,12 @@ def test_first_google_sign_in_creates_an_account_and_hands_back_a_token(google_c
     assert me["email"] == "new-person@example.com"
     assert me["oauth_provider"] == "google"
     assert me["has_password"] is False
-    assert me["onboarded"] is False  # the signup quiz still runs
+
+    # A social signup lands in the app with categories already there, same as
+    # an email signup - there is no quiz left to send anyone through.
+    categories = client.get("/api/budget", headers={"Authorization": f"Bearer {token}"}).json()
+    assert len(categories) == 6
+    assert "Other" in {c["name"] for c in categories}
 
 
 def test_google_sign_in_reuses_the_password_account_with_the_same_email(google_configured, monkeypatch):

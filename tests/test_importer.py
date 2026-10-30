@@ -49,13 +49,18 @@ def _build_january_workbook() -> bytes:
     return buf.getvalue()
 
 
-def test_parses_income_rows():
+def test_income_rows_are_stepped_over_without_derailing_the_categories():
+    """
+    Income is not imported any more, but its name+amount pairs still have to be
+    consumed two tokens at a time. Consumed one at a time, an income amount
+    becomes the next row's name and the whole sheet shifts.
+    """
     result = parse_workbook(_build_january_workbook(), "2026 Jan Budget.xlsx")
-    income_by_name = {r.name: r.amount for r in result.income}
-    assert income_by_name["Cash"] == 1500.0
-    assert income_by_name["ING"] == 400.0
-    assert income_by_name["Edenred"] == 1065.0
-    assert len(result.income) == 5
+    names = [r.name for r in result.categories]
+    for income_name in ("Cash", "ING", "Edenred"):
+        assert income_name not in names
+    # Nothing shifted: an amount never ended up read as a category name.
+    assert not any(name.replace(".", "").replace(",", "").strip().isdigit() for name in names)
 
 
 def test_parses_spending_categories_with_tags():
@@ -76,16 +81,10 @@ def test_warns_on_missing_amount():
 
 def test_ignores_noise_row():
     result = parse_workbook(_build_january_workbook(), "2026 Jan Budget.xlsx")
-    names = [r.name for r in result.income] + [r.name for r in result.categories]
+    names = [r.name for r in result.categories]
     assert "ASDFGHJ" not in names
 
 
-def test_parses_goals_block():
-    result = parse_workbook(_build_january_workbook(), "2026 Jan Budget.xlsx")
-    assert result.goals["Wants"].target_pct == 50.0
-    assert result.goals["Needs"].target_pct == 40.0
-    assert result.goals["Savings"].target_pct == 10.0
-    assert result.goals["Wants"].actual_pct == 67.83
 
 
 def test_csv_variant_parses_the_same_shape():
@@ -96,7 +95,6 @@ def test_csv_variant_parses_the_same_shape():
     content = buf.getvalue().encode("utf-8")
 
     result = parse_workbook(content, "budget.csv")
-    assert len(result.income) == 2
     assert len(result.categories) == 2
     assert result.categories[0].tag == "Wants"
 

@@ -830,13 +830,6 @@ textarea {
   padding: 6px 0 18px;
 }
 
-.goal-card {
-  background: var(--surface);
-  border-radius: 20px;
-  padding: 16px 16px 18px;
-  margin-bottom: 16px;
-}
-
 .caption {
   font-size: 13px;
   letter-spacing: 0.08em;
@@ -847,19 +840,6 @@ textarea {
 .goal-card .caption {
   margin-bottom: 14px;
   display: block;
-}
-
-.goal-list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.goal-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 14.5px;
-  margin-bottom: 7px;
 }
 
 .goal-head span:first-child { color: var(--text-soft); }
@@ -1600,49 +1580,6 @@ textarea {
 }
 
 .auth-links button:hover { color: var(--text); }
-
-/* ------------------------------------------------------------------ quiz */
-
-.quiz-question {
-  margin-bottom: 22px;
-}
-
-.quiz-question > p {
-  font-size: 16px;
-  font-weight: 600;
-  margin: 0 0 10px;
-}
-
-.quiz-options {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.quiz-option {
-  text-align: left;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: var(--surface);
-  border: 1px solid transparent;
-  color: var(--text-soft);
-  font-size: 15px;
-  cursor: pointer;
-}
-
-.quiz-option.is-selected {
-  border-color: var(--accent);
-  background: rgba(67, 83, 255, 0.14);
-  color: var(--text);
-}
-
-.quiz-progress {
-  color: var(--text-dim);
-  font-size: 13px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-}
 
 .identity-lines {
   min-width: 0;
@@ -2615,4 +2552,51 @@ label {
 .bank-row-btn:hover {
   background: var(--danger-wash);
   color: var(--danger);
+}
+
+
+/* --- the date on an entry: two taps that cover almost every case -------- */
+
+/* Label, the two shortcuts and the picker do not fit on one 375px line, so
+   the row wraps rather than scrolling - a scrolled row hid part of whichever
+   chip was selected, which is the one word that has to be readable. */
+.date-row {
+  flex-wrap: wrap;
+}
+
+.date-chip-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.date-chip {
+  flex: none;
+  height: 40px;
+  padding: 0 13px;
+  border-radius: 12px;
+  border: 1px solid var(--white-10);
+  background: var(--white-05);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+/* Selected reads the same here as on the currency chips above it - the two
+   rows are the same kind of choice, so they should not look like two kinds. */
+.date-chip.is-selected {
+  background: var(--white-14);
+  border-color: var(--white-14);
+  color: var(--text);
+}
+
+.date-row .date-chip-row input[type="date"] {
+  flex: none;
 }
